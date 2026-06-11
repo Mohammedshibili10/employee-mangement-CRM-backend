@@ -1,9 +1,7 @@
-
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Employee from '../models/Employee.js';
-
 
 export const login = async (req, res) => {
     try {
@@ -13,7 +11,6 @@ export const login = async (req, res) => {
             return res.status(400).json({ message: 'Email and password are required' });
         }
 
-    
         const user = await User.findOne({ email });
         if (!user) {
             return res.status(401).json({ message: 'Invalid email or password' });
@@ -24,11 +21,9 @@ export const login = async (req, res) => {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
-        // Mark the "first login" onboarding step for employees.
         if (user.role === 'employee') {
             await Employee.updateOne({ email: user.email }, { 'onboarding.firstLogin': true });
         }
-
 
         const token = jwt.sign(
             { id: user._id, role: user.role },
@@ -36,7 +31,6 @@ export const login = async (req, res) => {
             { expiresIn: '1d' }
         );
 
-       
         return res.status(200).json({
             token,
             user: {
@@ -56,10 +50,9 @@ export const logout = (req, res) => {
     res.status(200).json({ message: 'Logged out successfully' });
 }
 
-
 export const getMe = async (req, res) => {
     try {
-      
+
         const user = await User.findById(req.user.id).select('-password').lean();
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -72,14 +65,11 @@ export const getMe = async (req, res) => {
             role: user.role,
         };
 
-        // Employees have extra details on their Employee record (linked by email).
         if (user.role === 'employee') {
             const employee = await Employee.findOne({ email: user.email })
                 .populate('department')
                 .lean();
             if (employee) {
-                // employeeId lets the frontend load this employee's own
-                // attendance/leaves and apply for leave.
                 profile.employeeId = employee._id;
                 profile.empId = employee.empId;
                 profile.designation = employee.designation;
@@ -87,6 +77,7 @@ export const getMe = async (req, res) => {
                 profile.phone = employee.phone;
                 profile.joiningDate = employee.joiningDate;
                 profile.status = employee.status;
+                profile.profilePhoto = employee.profilePhoto || null;
             }
         }
 
@@ -96,7 +87,6 @@ export const getMe = async (req, res) => {
     }
 };
 
-// PUT /api/auth/change-password  -> change the logged-in user's password.
 export const changePassword = async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;

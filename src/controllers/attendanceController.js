@@ -1,6 +1,3 @@
-// Attendance controller.
-// Handles: list attendance records, mark attendance, attendance summary, check-in.
-
 import Attendance from "../models/Attendance.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
@@ -13,9 +10,8 @@ const getDayRange = (date) => {
     return { start, end };
 };
 
-// Distance in meters between two lat/lng points (Haversine formula).
 const distanceInMeters = (lat1, lng1, lat2, lng2) => {
-    const R = 6371000; // Earth's radius in meters
+    const R = 6371000;
     const toRad = (deg) => (deg * Math.PI) / 180;
     const dLat = toRad(lat2 - lat1);
     const dLng = toRad(lng2 - lng1);
@@ -25,9 +21,6 @@ const distanceInMeters = (lat1, lng1, lat2, lng2) => {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-// POST /api/attendance/checkin
-// Employee checks in with their live GPS location + a selfie.
-// Allowed only within the office radius, once per day.
 export const checkIn = async (req, res) => {
     try {
         const { latitude, longitude, image } = req.body;
@@ -35,8 +28,6 @@ export const checkIn = async (req, res) => {
             return res.status(400).json({ message: 'Location and selfie are required' });
         }
 
-        // The token only holds the user id/role, so resolve the Employee from the
-        // logged-in user (by email). This stops anyone checking in as someone else.
         const user = await User.findById(req.user.id).lean();
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -46,7 +37,6 @@ export const checkIn = async (req, res) => {
             return res.status(404).json({ message: 'Employee profile not found' });
         }
 
-        // Office location + allowed radius come from the .env file.
         const officeLat = parseFloat(process.env.OFFICE_LAT);
         const officeLng = parseFloat(process.env.OFFICE_LNG);
         const radius = parseFloat(process.env.OFFICE_RADIUS || '200');
@@ -54,7 +44,6 @@ export const checkIn = async (req, res) => {
             return res.status(500).json({ message: 'Office location is not configured' });
         }
 
-        // Reject if the employee is too far from the office.
         const distance = distanceInMeters(latitude, longitude, officeLat, officeLng);
         if (distance > radius) {
             return res.status(403).json({
@@ -62,7 +51,6 @@ export const checkIn = async (req, res) => {
             });
         }
 
-        // Only one check-in per day per employee.
         const { start, end } = getDayRange(new Date());
         const existing = await Attendance.findOne({
             employee: employee._id,
@@ -74,10 +62,6 @@ export const checkIn = async (req, res) => {
 
         const now = new Date();
 
-        // Decide the status from the check-in time (server local time):
-        //   before 9:00 AM        -> present
-        //   9:00 AM to 12:29 PM   -> late
-        //   12:30 PM or later      -> half-day
         const minutesOfDay = now.getHours() * 60 + now.getMinutes();
         let status;
         if (minutesOfDay < 9 * 60) {
@@ -104,8 +88,6 @@ export const checkIn = async (req, res) => {
     }
 };
 
-// POST /api/attendance/checkout
-// Employee checks out (must have checked in today). Captures GPS + selfie again.
 export const checkOut = async (req, res) => {
     try {
         const { latitude, longitude, image } = req.body;
@@ -136,7 +118,6 @@ export const checkOut = async (req, res) => {
             });
         }
 
-        // Must have a check-in record for today.
         const { start, end } = getDayRange(new Date());
         const attendance = await Attendance.findOne({
             employee: employee._id,
@@ -151,7 +132,6 @@ export const checkOut = async (req, res) => {
 
         const checkOutTime = new Date();
 
-        // Overtime if checking out after 6:00 PM (server local time).
         const minutesOfDay = checkOutTime.getHours() * 60 + checkOutTime.getMinutes();
         const sixPm = 18 * 60;
         const overtime = minutesOfDay > sixPm;
@@ -172,8 +152,6 @@ export const checkOut = async (req, res) => {
     }
 };
 
-// POST /api/attendance
-
 export const markAttendance = async (req, res) => {
     try {
         const { employee, date, checkIn, checkOut, status } = req.body;
@@ -187,10 +165,8 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Invalid status value' });
         }
 
-        // Default the date to today if it wasn't provided.
         const attendanceDate = date ? new Date(date) : new Date();
 
-        // Stop the same employee from being marked twice on the same day.
         const { start, end } = getDayRange(attendanceDate);
         const existing = await Attendance.findOne({
             employee,
@@ -214,7 +190,6 @@ export const markAttendance = async (req, res) => {
     }
 };
 
-
 export const getAttendance = async (req, res) => {
     try {
         const { employee, date } = req.query;
@@ -229,7 +204,6 @@ export const getAttendance = async (req, res) => {
         }
 
         const attendance = await Attendance.find(filter)
-            // also populate the employee's department so the UI can show it
             .populate({ path: 'employee', populate: { path: 'department' } })
             .sort({ date: -1 });
 
@@ -238,7 +212,6 @@ export const getAttendance = async (req, res) => {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
     }
 };
-
 
 export const getAttendanceSummary = async (req, res) => {
     try {
@@ -251,7 +224,6 @@ export const getAttendanceSummary = async (req, res) => {
 
         const records = await Attendance.find(filter);
 
-        // Start every status at 0 so the response shape is always the same.
         const summary = {
             present: 0,
             absent: 0,

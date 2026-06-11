@@ -1,5 +1,3 @@
-
-
 import express from 'express';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { login, logout, getMe, changePassword } from '../controllers/authController.js';

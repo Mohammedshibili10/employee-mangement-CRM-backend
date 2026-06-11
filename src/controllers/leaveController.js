@@ -1,9 +1,7 @@
-
 import Leave from "../models/Leave.js";
 
 export const applyLeave = async (req, res) => {
     try{
-        // The Leave model uses type/from/to (not startDate/endDate).
         const { employee, type, from, to, reason } = req.body;
         if(!employee || !type || !from || !to || !reason){
             return res.status(400).json({ message: 'All fields are required' });
@@ -17,7 +15,6 @@ export const applyLeave = async (req, res) => {
 
 export const getLeaves = async (req, res) => {
     try{
-        // Optional ?employee=<id> filter so an employee can see only their own leaves.
         const { employee } = req.query;
         const filter = employee ? { employee } : {};
         const leaves = await Leave.find(filter).populate('employee');
@@ -69,4 +66,3 @@ export const statusLeave = async (req, res) => {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
     }
 }
-

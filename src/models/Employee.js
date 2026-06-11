@@ -1,4 +1,3 @@
-
 import mongoose from 'mongoose';
 import { z } from 'zod';
 
@@ -11,6 +10,7 @@ export const employeeSchema = z.object({
     designation: z.string().min(1, "designation is required"),
     joiningDate: z.coerce.date(),
     status: z.enum(['active', 'inactive', 'terminated']).default('active'),
+    profilePhoto: z.string().optional(),
     whatsappSent: z.boolean().default(false),
     onboarding: z.object({
         created: z.boolean().default(false),
@@ -30,6 +30,7 @@ const employeeMongooseSchema = new mongoose.Schema({
     designation: { type: String, required: true },
     joiningDate: { type: Date, required: true },
     status: { type: String, enum: ['active', 'inactive', 'terminated'], default: 'active' },
+    profilePhoto: { type: String },
     whatsappSent: { type: Boolean, default: false },
     onboarding: {
         created: { type: Boolean, default: false },

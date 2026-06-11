@@ -1,12 +1,9 @@
-// One-time seed script: creates a default admin user if one does not exist.
-// Run it with:  node src/seedAdmin.js
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import User from './models/User.js';
 
 dotenv.config();
-
 
 const ADMIN = {
     name: 'Admin',
@@ -17,7 +14,7 @@ const ADMIN = {
 
 const seedAdmin = async () => {
     try {
-       
+
         await mongoose.connect(process.env.MONGO_URI);
         console.log('MongoDB connected');
 
@@ -29,7 +26,6 @@ const seedAdmin = async () => {
 
         const hashedPassword = await bcrypt.hash(ADMIN.password, 10);
 
-        // 4. Create the admin user.
         await User.create({
             name: ADMIN.name,
             email: ADMIN.email,
@@ -41,7 +37,7 @@ const seedAdmin = async () => {
     } catch (error) {
         console.error('Failed to seed admin user:', error.message);
     } finally {
-    
+
         await mongoose.connection.close();
         process.exit();
     }

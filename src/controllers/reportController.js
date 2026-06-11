@@ -1,4 +1,3 @@
-
 import Attendance from "../models/Attendance.js";
 import Leave from "../models/Leave.js";
 import Employee from "../models/Employee.js";
@@ -28,6 +27,4 @@ export const getLeaveReport = async (req, res) => {
     } catch (error) {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
     }
-}   
-
-
+}

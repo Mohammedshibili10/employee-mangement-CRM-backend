@@ -1,5 +1,3 @@
-// Department model.
-// Fields: name, head, employeeCount.
 import mongoose from 'mongoose';
 import { z } from 'zod';
 

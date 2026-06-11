@@ -1,6 +1,3 @@
-// Auth middleware.
-// TODO: verify the JWT token and protect private routes.
-
 import jwt from 'jsonwebtoken';
 
 const authMiddleware = (req, res, next) => {
@@ -16,10 +13,10 @@ const authMiddleware = (req, res, next) => {
    const decoded=jwt.verify(token,process.env.JWT_SECRET);
    req.user=decoded;
     next();
-    
+
     } catch (error) {
         return res.status(401).json({message:'Invalid token',error:error.message});
-    }   
-   
+    }
+
 }
 export default {protect:authMiddleware};

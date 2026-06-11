@@ -1,4 +1,3 @@
-
 import bcrypt from "bcryptjs";
 import Employee from "../models/Employee.js";
 import User from "../models/User.js";
@@ -28,7 +27,6 @@ export const createEmployee = async (req, res) => {
             ...req.body,
             empId,
             phone: phoneNumber,
-            // The employee now exists and has an ID, so mark those onboarding steps done.
             onboarding: {
                 created: true,
                 idGenerated: true,
@@ -46,7 +44,6 @@ export const createEmployee = async (req, res) => {
             role: 'employee',
         });
 
-        // Send the WhatsApp invitation only if the admin asked for it (default yes).
         if (sendWhatsApp !== false) {
             const whatsappSent = await sendWhatsAppMessage(employee.phone, employee.name);
             if (whatsappSent) {
@@ -62,7 +59,6 @@ export const createEmployee = async (req, res) => {
     }
 }
 
-
 export const getEmployees = async (req, res) => {
     try{
         const employees = await Employee.find().populate('department');
@@ -72,7 +68,6 @@ export const getEmployees = async (req, res) => {
     }
 }
 
-
 export const getEmployee = async (req, res) => {
     try{
         const {id} = req.params;
@@ -80,21 +75,18 @@ export const getEmployee = async (req, res) => {
         if(!employee){
             return res.status(404).json({ message: 'Employee not found' });
         }
-        // Derive the onboarding status from real facts so it's always correct,
-        // even for older records whose stored flags were never set.
         const onboarding = {
-            created: true,                                   // the record exists
-            idGenerated: !!employee.empId,                   // it has an employee ID
+            created: true,
+            idGenerated: !!employee.empId,
             whatsappSent: employee.whatsappSent || employee.onboarding?.whatsappSent || false,
             firstLogin: employee.onboarding?.firstLogin || false,
             profileCompleted: employee.onboarding?.profileCompleted || false,
         };
         return res.status(200).json({ employee: { ...employee, onboarding }, message: 'Employee retrieved successfully' });
     } catch (error) {
-        return res.status(500).json({ message: 'Something went wrong', error: error.message }); 
+        return res.status(500).json({ message: 'Something went wrong', error: error.message });
     }
     }
-
 
     export const updateEmployee = async (req, res) => {
         try{
@@ -103,7 +95,9 @@ export const getEmployee = async (req, res) => {
             if(!name || !email || !department || !phoneNumber || !designation || !joiningDate){
                 return res.status(400).json({ message: 'All fields are required' });
             }
-            const employee =await Employee.findByIdAndUpdate(id,req.body,{ new: true });
+
+            const { profilePhoto, ...updatable } = req.body;
+            const employee =await Employee.findByIdAndUpdate(id,updatable,{ new: true });
             if(!employee){
                 return res.status(404).json({ message: 'Employee not found' });
             }
@@ -112,7 +106,6 @@ export const getEmployee = async (req, res) => {
             return res.status(500).json({ message: 'Something went wrong', error: error.message });
         }
     }
-
 
 export const deleteEmployee = async (req, res) => {
     try{
@@ -127,7 +120,6 @@ export const deleteEmployee = async (req, res) => {
     }
 }
 
-
 export  const getOnboardingStatus = async (req, res) => {
     try{
         const {id}=req.params;
@@ -141,3 +133,43 @@ export  const getOnboardingStatus = async (req, res) => {
     }
 }
 
+const resolveOwnEmployee = async (req) => {
+    const user = await User.findById(req.user.id).lean();
+    if (!user) return { error: { status: 404, message: 'User not found' } };
+    if (user.role !== 'employee') {
+        return { error: { status: 403, message: 'Only employees can manage a profile photo' } };
+    }
+    const employee = await Employee.findOne({ email: user.email });
+    if (!employee) return { error: { status: 404, message: 'Employee profile not found' } };
+    return { employee };
+};
+
+export const updateMyPhoto = async (req, res) => {
+    try {
+        const { image } = req.body;
+        if (!image) {
+            return res.status(400).json({ message: 'Image is required' });
+        }
+        const { employee, error } = await resolveOwnEmployee(req);
+        if (error) return res.status(error.status).json({ message: error.message });
+
+        employee.profilePhoto = image;
+        await employee.save();
+        return res.status(200).json({ message: 'Profile photo updated', profilePhoto: employee.profilePhoto });
+    } catch (error) {
+        return res.status(500).json({ message: 'Something went wrong', error: error.message });
+    }
+};
+
+export const deleteMyPhoto = async (req, res) => {
+    try {
+        const { employee, error } = await resolveOwnEmployee(req);
+        if (error) return res.status(error.status).json({ message: error.message });
+
+        employee.profilePhoto = null;
+        await employee.save();
+        return res.status(200).json({ message: 'Profile photo removed' });
+    } catch (error) {
+        return res.status(500).json({ message: 'Something went wrong', error: error.message });
+    }
+};

@@ -1,5 +1,3 @@
-
-
 import Department from "../models/Department.js";
 
 export const createDepartment =async (req, res) => {
@@ -21,12 +19,10 @@ export const getDepartments = async (req, res) => {
         const departments = await Department.find();
         return res.status(200).json({ departments, message: 'Departments retrieved successfully' });
 
-
     }catch (error) {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
     }
 }
-
 
 export const updateDepartment = async (req, res) => {
     try{
@@ -58,6 +54,3 @@ export const deleteDepartment = async (req, res) => {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
     }
 }
-
-
-
