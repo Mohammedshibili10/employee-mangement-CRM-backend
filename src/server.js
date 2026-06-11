@@ -9,6 +9,7 @@ import employeeRoutes from './routes/employeeRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
 import departmentRoutes from './routes/departmentRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
+import taskReportRoutes from './routes/taskReportRoutes.js';
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/task-reports', taskReportRoutes);
 
 app.listen(PORT,()=>{
     connectDB();
