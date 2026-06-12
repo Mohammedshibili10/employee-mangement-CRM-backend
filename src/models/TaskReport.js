@@ -8,7 +8,8 @@ export const taskReportSchema = z.object({
     date: z.coerce.date(),
     status: z.enum(['completed', 'in-progress', 'pending']).default('pending'),
     file: z.string().optional(),
-    fileName: z.string().optional()
+    fileName: z.string().optional(),
+    verified: z.boolean().default(false)
 });
 
 const taskReportMongooseSchema = new mongoose.Schema({
@@ -21,7 +22,11 @@ const taskReportMongooseSchema = new mongoose.Schema({
     // Optional attachment stored as a base64 data URL (matches how profile
     // photos and attendance selfies are stored in this project).
     file: { type: String },
-    fileName: { type: String }
+    fileName: { type: String },
+
+    // Admin verification of the report.
+    verified: { type: Boolean, default: false },
+    verifiedAt: { type: Date }
 }, { timestamps: true });
 
 export default mongoose.model('TaskReport', taskReportMongooseSchema);

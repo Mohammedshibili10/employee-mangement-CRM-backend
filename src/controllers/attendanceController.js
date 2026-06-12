@@ -10,17 +10,6 @@ const getDayRange = (date) => {
     return { start, end };
 };
 
-const distanceInMeters = (lat1, lng1, lat2, lng2) => {
-    const R = 6371000;
-    const toRad = (deg) => (deg * Math.PI) / 180;
-    const dLat = toRad(lat2 - lat1);
-    const dLng = toRad(lng2 - lng1);
-    const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
 export const checkIn = async (req, res) => {
     try {
         const { latitude, longitude, image } = req.body;
@@ -35,20 +24,6 @@ export const checkIn = async (req, res) => {
         const employee = await Employee.findOne({ email: user.email });
         if (!employee) {
             return res.status(404).json({ message: 'Employee profile not found' });
-        }
-
-        const officeLat = parseFloat(process.env.OFFICE_LAT);
-        const officeLng = parseFloat(process.env.OFFICE_LNG);
-        const radius = parseFloat(process.env.OFFICE_RADIUS || '200');
-        if (Number.isNaN(officeLat) || Number.isNaN(officeLng)) {
-            return res.status(500).json({ message: 'Office location is not configured' });
-        }
-
-        const distance = distanceInMeters(latitude, longitude, officeLat, officeLng);
-        if (distance > radius) {
-            return res.status(403).json({
-                message: `You are about ${Math.round(distance)}m from the office. Check-in is allowed within ${radius}m.`,
-            });
         }
 
         const { start, end } = getDayRange(new Date());
@@ -102,20 +77,6 @@ export const checkOut = async (req, res) => {
         const employee = await Employee.findOne({ email: user.email });
         if (!employee) {
             return res.status(404).json({ message: 'Employee profile not found' });
-        }
-
-        const officeLat = parseFloat(process.env.OFFICE_LAT);
-        const officeLng = parseFloat(process.env.OFFICE_LNG);
-        const radius = parseFloat(process.env.OFFICE_RADIUS || '200');
-        if (Number.isNaN(officeLat) || Number.isNaN(officeLng)) {
-            return res.status(500).json({ message: 'Office location is not configured' });
-        }
-
-        const distance = distanceInMeters(latitude, longitude, officeLat, officeLng);
-        if (distance > radius) {
-            return res.status(403).json({
-                message: `You are about ${Math.round(distance)}m from the office. Check-out is allowed within ${radius}m.`,
-            });
         }
 
         const { start, end } = getDayRange(new Date());

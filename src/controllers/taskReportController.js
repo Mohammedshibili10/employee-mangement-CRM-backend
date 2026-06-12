@@ -50,6 +50,30 @@ export const createTaskReport = async (req, res) => {
     }
 };
 
+export const verifyTaskReport = async (req, res) => {
+    try {
+        // Only admins can verify task reports. The role comes from the JWT.
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admins can verify task reports' });
+        }
+
+        const { id } = req.params;
+        const taskReport = await TaskReport.findByIdAndUpdate(
+            id,
+            { verified: true, verifiedAt: new Date() },
+            { new: true }
+        ).populate({ path: 'employee', populate: { path: 'department' } });
+
+        if (!taskReport) {
+            return res.status(404).json({ message: 'Task report not found' });
+        }
+
+        return res.status(200).json({ message: 'Task report verified successfully', taskReport });
+    } catch (error) {
+        return res.status(500).json({ message: 'Something went wrong', error: error.message });
+    }
+};
+
 export const getTaskReports = async (req, res) => {
     try {
         const user = await User.findById(req.user.id).lean();
