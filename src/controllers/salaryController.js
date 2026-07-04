@@ -3,25 +3,28 @@ import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LopRecord from "../models/LopRecord.js";
 
-// Sum the recorded LOP (Loss of Pay) days for an employee in a given month.
+// Total LOP (Loss of Pay) days for an employee in a month, combining the two
+// sources that stay in sync: manual LOP entries (Deductions module) and days
+// marked as LOP in the Attendance module.
 async function readLopDays(employeeId, year, month) {
+    // Pardoned LOP is excluded — it stays on record but isn't deducted from pay.
+    const manual = await LopRecord.find({ employee: employeeId, month, year, pardoned: { $ne: true } });
+    const manualDays = manual.reduce((sum, r) => sum + (Number(r.days) || 0), 0);
+
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const end = new Date(year, month, 0, 23, 59, 59, 999);
-    const records = await LopRecord.find({ employee: employeeId, date: { $gte: start, $lte: end } });
-    return records.reduce((sum, r) => sum + (Number(r.days) || 0), 0);
+    const attendance = await Attendance.find({ employee: employeeId, date: { $gte: start, $lte: end }, lop: { $gt: 0 }, lopPardoned: { $ne: true } });
+    const attendanceDays = attendance.reduce((sum, r) => sum + (Number(r.lop) || 0), 0);
+
+    return manualDays + attendanceDays;
 }
 
 // ---- calculation helpers ----------------------------------------------------
 
-// Number of weekdays (Mon–Fri) in a given month — used as monthly working days.
-function countWorkingDays(year, month) {
-    const totalDays = new Date(year, month, 0).getDate(); // month is 1-12
-    let count = 0;
-    for (let d = 1; d <= totalDays; d++) {
-        const wd = new Date(year, month - 1, d).getDay();
-        if (wd !== 0 && wd !== 6) count++;
-    }
-    return count;
+// Monthly working days are fixed at 30 (business rule) — the salary divisor.
+const MONTHLY_WORKING_DAYS = 30;
+function countWorkingDays() {
+    return MONTHLY_WORKING_DAYS;
 }
 
 const round = (n) => Math.round(n || 0);
@@ -149,7 +152,8 @@ function computeNetPay(r) {
     const deductions =
         (r.lopDeduction || 0) + (r.lateDeduction || 0) + (r.salaryAdvance || 0) +
         (r.wfhDeduction || 0) + (r.officeExpenses || 0) + (r.assetDeduction || 0);
-    return round((r.actualPay || 0) - deductions);
+    // Net pay is never negative (deductions can't exceed pay into the red).
+    return Math.max(0, round((r.actualPay || 0) - deductions));
 }
 
 // ---- controllers ------------------------------------------------------------
@@ -291,7 +295,8 @@ export const recalcSalaryForMonth = async (employeeId, year, month) => {
         if (!report) return;
         const employee = await Employee.findById(employeeId);
         if (!employee) return;
-        const workingDays = report.monthlyWorkingDays || countWorkingDays(year, month);
+        // Working days are fixed at 30 (not the stored/overridden value).
+        const workingDays = MONTHLY_WORKING_DAYS;
         const calc = await computeSalary(employee, year, month, workingDays);
         Object.assign(report, calc);
         report.netPay = computeNetPay(report);

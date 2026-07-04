@@ -40,7 +40,9 @@ const attendanceMongooseSchema = new mongoose.Schema({
     overtimeMinutes: { type: Number, default: 0 },
 
     // Loss of Pay for the day (admin-entered when the LOP box is checked).
-    lop: { type: Number, default: 0 }
+    lop: { type: Number, default: 0 },
+    // Pardoned LOP: kept for reference but not deducted from pay.
+    lopPardoned: { type: Boolean, default: false }
 }, { timestamps: true });
 
 export default mongoose.model('Attendance', attendanceMongooseSchema);

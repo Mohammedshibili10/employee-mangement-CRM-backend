@@ -197,7 +197,7 @@ export const markAttendance = async (req, res) => {
 export const updateAttendance = async (req, res) => {
     try {
         const { id } = req.params;
-        const { date, checkIn, checkOut, status, leaveType, lop } = req.body;
+        const { date, checkIn, checkOut, status, leaveType, lop, lopPardoned } = req.body;
 
         const validStatus = ['present', 'absent', 'late', 'half-day', 'leave'];
         if (status && !validStatus.includes(status)) {
@@ -238,6 +238,9 @@ export const updateAttendance = async (req, res) => {
             attendance.overtimeMinutes = overtimeMinutes;
             if (lop !== undefined) attendance.lop = Number(lop) || 0;
         }
+
+        // Pardon flag for the attendance LOP (kept for reference, not deducted).
+        if (lopPardoned !== undefined) attendance.lopPardoned = Boolean(lopPardoned);
 
         await attendance.save();
         // Recalculate this month's salary from the updated attendance (LOP, gross,
