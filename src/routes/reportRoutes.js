@@ -3,13 +3,11 @@ import authMiddleware from '../middleware/authMiddleware.js';
 import {
     getEmployeeReport,
     getAttendanceReport,
-    getLeaveReport,
 } from '../controllers/reportController.js';
 
 const router = express.Router();
 
-router.get('/employees', authMiddleware.protect, getEmployeeReport);
-router.get('/attendance', authMiddleware.protect, getAttendanceReport);
-router.get('/leaves', authMiddleware.protect, getLeaveReport);
+router.get('/employees', authMiddleware.protect, authMiddleware.adminOnly, getEmployeeReport);
+router.get('/attendance', authMiddleware.protect, authMiddleware.adminOnly, getAttendanceReport);
 
 export default router;

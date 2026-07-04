@@ -6,10 +6,10 @@ import errorMiddleware from './middleware/errorMiddleware.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import employeeRoutes from './routes/employeeRoutes.js';
-import leaveRoutes from './routes/leaveRoutes.js';
 import departmentRoutes from './routes/departmentRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
-import taskReportRoutes from './routes/taskReportRoutes.js';
+import salaryRoutes from './routes/salaryRoutes.js';
+import lopRoutes from './routes/lopRoutes.js';
 
 dotenv.config();
 
@@ -27,10 +27,10 @@ app.get('/',(req,res)=>{
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/employees', employeeRoutes);
-app.use('/api/leaves', leaveRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/reports', reportRoutes);
-app.use('/api/task-reports', taskReportRoutes);
+app.use('/api/salary', salaryRoutes);
+app.use('/api/lop', lopRoutes);
 
 app.listen(PORT,()=>{
     connectDB();

@@ -9,9 +9,9 @@ import {
 
 const router = express.Router();
 
-router.get('/', authMiddleware.protect, getDepartments);
-router.post('/', authMiddleware.protect, createDepartment);
-router.put('/:id', authMiddleware.protect, updateDepartment);
-router.delete('/:id', authMiddleware.protect, deleteDepartment);
+router.get('/', authMiddleware.protect, authMiddleware.adminOnly, getDepartments);
+router.post('/', authMiddleware.protect, authMiddleware.adminOnly, createDepartment);
+router.put('/:id', authMiddleware.protect, authMiddleware.adminOnly, updateDepartment);
+router.delete('/:id', authMiddleware.protect, authMiddleware.adminOnly, deleteDepartment);
 
 export default router;
