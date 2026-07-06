@@ -87,6 +87,44 @@ export const getMe = async (req, res) => {
     }
 };
 
+export const updateProfile = async (req, res) => {
+    try {
+        const { name, email } = req.body;
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (name !== undefined) {
+            if (!name.trim() || name.trim().length < 2) {
+                return res.status(400).json({ message: 'Name must be at least 2 characters' });
+            }
+            user.name = name.trim();
+        }
+
+        if (email !== undefined && email.trim() !== user.email) {
+            const clean = email.trim().toLowerCase();
+            const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRe.test(clean)) {
+                return res.status(400).json({ message: 'Invalid email format' });
+            }
+            const taken = await User.findOne({ email: clean, _id: { $ne: user._id } });
+            if (taken) {
+                return res.status(409).json({ message: 'That email is already in use' });
+            }
+            user.email = clean;
+        }
+
+        await user.save();
+        return res.status(200).json({
+            message: 'Profile updated successfully',
+            user: { id: user._id, name: user.name, email: user.email, role: user.role },
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Something went wrong', error: error.message });
+    }
+};
+
 export const changePassword = async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
