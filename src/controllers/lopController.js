@@ -26,10 +26,15 @@ export const getDeductions = async (req, res) => {
         employees.forEach((e) => { empMap[String(e._id)] = e; });
 
         const manual = await LopRecord.find({ month: m, year: y }).lean();
-        // Attendance LOP: explicit LOP marks (lop > 0) AND unpaid absences (status 'absent').
+        // Attendance LOP: explicit LOP marks (lop > 0), unpaid absences (status
+        // 'absent'), AND typeless full leaves (status 'leave' with no leave type).
         const attendance = await Attendance.find({
             date: { $gte: start, $lte: end },
-            $or: [{ lop: { $gt: 0 } }, { status: 'absent' }],
+            $or: [
+                { lop: { $gt: 0 } },
+                { status: 'absent' },
+                { status: 'leave', leaveType: null },
+            ],
         }).lean();
 
         const entries = [];
@@ -49,6 +54,9 @@ export const getDeductions = async (req, res) => {
             if (a.lop > 0) {
                 // Explicit LOP marked in the Attendance module (drives the LOP deduction).
                 entries.push({ ...base, _id: a._id, source: 'attendance', absence: false, days: a.lop, reason: 'Marked LOP in Attendance', pardoned: !!a.lopPardoned });
+            } else if (a.status === 'leave') {
+                // Full leave with no type — unpaid, so it's a loss-of-pay day.
+                entries.push({ ...base, _id: a._id, source: 'attendance', absence: true, days: 1, reason: 'Full leave (unpaid)', pardoned: false });
             } else {
                 // Unpaid absence — a loss-of-pay day (reflected in Actual Pay, not double-deducted).
                 entries.push({ ...base, _id: a._id, source: 'attendance', absence: true, days: 1, reason: 'Absent (unpaid)', pardoned: false });

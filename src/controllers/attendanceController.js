@@ -170,8 +170,9 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Attendance already marked for this day' });
         }
 
-        // A leave record has no check-in/out; otherwise status derives from check-in.
-        const isLeave = !!leaveType;
+        // A leave record (Sick/Casual, or a typeless "None" full leave) has no
+        // check-in/out; a worked day derives its status from the check-in.
+        const isLeave = !!leaveType || status === 'leave';
         const finalStatus = isLeave ? 'leave' : (status || deriveStatus(checkIn));
         const { overtime, overtimeMinutes } = isLeave ? { overtime: false, overtimeMinutes: 0 } : computeOvertime(checkOut);
 
@@ -214,22 +215,20 @@ export const updateAttendance = async (req, res) => {
 
         if (date) attendance.date = new Date(date);
 
-        if (leaveType !== undefined) {
-            if (leaveType) {
-                // Switch to a paid leave — clear check-in/out, overtime and LOP.
-                attendance.leaveType = leaveType;
-                attendance.status = 'leave';
-                attendance.checkIn = null;
-                attendance.checkOut = null;
-                attendance.overtime = false;
-                attendance.overtimeMinutes = 0;
-                attendance.lop = 0;
-            } else {
-                attendance.leaveType = undefined;
-            }
-        }
-
-        if (!attendance.leaveType) {
+        // A full leave when the status is 'leave' OR a leave type is given.
+        // "None" full leave (status 'leave', no type) is unpaid → counts as LOP.
+        const wantsLeave = status === 'leave' || !!leaveType;
+        if (wantsLeave) {
+            attendance.status = 'leave';
+            attendance.leaveType = leaveType || undefined;   // "" / missing = None (unpaid)
+            attendance.checkIn = null;
+            attendance.checkOut = null;
+            attendance.overtime = false;
+            attendance.overtimeMinutes = 0;
+            attendance.lop = 0;
+        } else {
+            // A worked day — clear any leave type and use the given/derived status.
+            attendance.leaveType = undefined;
             if (checkIn !== undefined) attendance.checkIn = checkIn ? new Date(checkIn) : null;
             if (checkOut !== undefined) attendance.checkOut = checkOut ? new Date(checkOut) : null;
             attendance.status = status || deriveStatus(attendance.checkIn);

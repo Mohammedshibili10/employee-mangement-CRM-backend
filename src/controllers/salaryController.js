@@ -66,9 +66,16 @@ async function readAttendance(employeeId, year, month) {
     });
     let attendanceDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0;
     for (const r of records) {
-        if (r.status === 'present' || r.status === 'late' || r.status === 'half-day') {
+        if (r.status === 'present') {
+            // On-time full day → a full day's attendance and full pay, no penalty.
+            attendanceDays += 1;
+        } else if (r.status === 'late') {
+            // Full attendance day, but a late-arrival penalty from the check-in time.
             attendanceDays += 1;
             lateFraction += lateFractionFor(r.checkIn);
+        } else if (r.status === 'half-day') {
+            // Half day = half an attendance day → half a day's pay.
+            attendanceDays += 0.5;
         } else if (r.status === 'leave') {
             if (r.leaveType === 'sick') sickLeaveDays += 1;
             else if (r.leaveType === 'casual') casualLeaveDays += 1;
