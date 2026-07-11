@@ -151,7 +151,7 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Employee is required' });
         }
 
-        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave'];
+        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh'];
         if (status && !validStatus.includes(status)) {
             return res.status(400).json({ message: 'Invalid status value' });
         }
@@ -198,9 +198,9 @@ export const markAttendance = async (req, res) => {
 export const updateAttendance = async (req, res) => {
     try {
         const { id } = req.params;
-        const { date, checkIn, checkOut, status, leaveType, lop, lopPardoned } = req.body;
+        const { date, checkIn, checkOut, status, leaveType, lop, lopPardoned, wfhPardoned } = req.body;
 
-        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave'];
+        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh'];
         if (status && !validStatus.includes(status)) {
             return res.status(400).json({ message: 'Invalid status value' });
         }
@@ -240,6 +240,8 @@ export const updateAttendance = async (req, res) => {
 
         // Pardon flag for the attendance LOP (kept for reference, not deducted).
         if (lopPardoned !== undefined) attendance.lopPardoned = Boolean(lopPardoned);
+        
+        if (wfhPardoned !== undefined) attendance.wfhPardoned = Boolean(wfhPardoned);
 
         await attendance.save();
         // Recalculate this month's salary from the updated attendance (LOP, gross,
@@ -316,5 +318,29 @@ export const getAttendanceSummary = async (req, res) => {
         });
     } catch (error) {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
+    }
+};
+
+export const pardonWfhForMonth = async (req, res) => {
+    try {
+        const { employeeId, month, year } = req.body;
+        if (!employeeId || !month || !year) {
+            return res.status(400).json({ message: 'Missing required fields' });
+        }
+        
+        const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
+        const end = new Date(year, month, 0, 23, 59, 59, 999);
+        
+        await Attendance.updateMany(
+            { employee: employeeId, date: { $gte: start, $lte: end }, status: 'wfh' },
+            { $set: { wfhPardoned: true } }
+        );
+        
+        const updatedReport = await recalcSalaryForMonth(employeeId, year, month);
+        
+        res.status(200).json({ message: 'WFH pardoned successfully', report: updatedReport });
+    } catch (error) {
+        console.error("pardonWfhForMonth Error:", error);
+        res.status(500).json({ message: 'Server Error' });
     }
 };

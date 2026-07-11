@@ -64,7 +64,7 @@ async function readAttendance(employeeId, year, month) {
         employee: employeeId,
         date: { $gte: start, $lte: end },
     });
-    let attendanceDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0;
+    let attendanceDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0, wfhDeductionDays = 0;
     for (const r of records) {
         if (r.status === 'present') {
             // On-time full day → a full day's attendance and full pay, no penalty.
@@ -79,9 +79,12 @@ async function readAttendance(employeeId, year, month) {
         } else if (r.status === 'leave') {
             if (r.leaveType === 'sick') sickLeaveDays += 1;
             else if (r.leaveType === 'casual') casualLeaveDays += 1;
+        } else if (r.status === 'wfh') {
+            attendanceDays += 1;
+            if (!r.wfhPardoned) wfhDeductionDays += 1;
         }
     }
-    return { attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction };
+    return { attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays };
 }
 
 // Pure earnings math from attendance figures (no DB access) so it can be reused
@@ -91,7 +94,7 @@ async function readAttendance(employeeId, year, month) {
 // Special Allowance is whatever is left of gross.
 // Sick/Casual leave are PAID and excluded from LOP. LOP = working days with no
 // attendance and no approved leave (unapproved absences) — deducted from pay.
-function deriveEarnings({ monthlySalary, workingDays, attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0 }) {
+function deriveEarnings({ monthlySalary, workingDays, attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
     // Gross Salary = ROUND((Salary / Monthly Days) * Attendance, 1)
     // Pay is prorated by attendance: a full day's pay (salary / working days)
     // multiplied by the number of days actually attended, rounded to 1 decimal.
@@ -116,6 +119,14 @@ function deriveEarnings({ monthlySalary, workingDays, attendanceDays, sickLeaveD
     // Recorded LOP (from the LOP module) is deducted at a full day's pay per LOP day.
     const recordedLopDays = Number(lopDays) || 0;
     const lopDeduction = round(perDay * recordedLopDays);
+    const wfhDeduction = round((perDay * 0.5) * (wfhDeductionDays || 0));
+
+    let pfDeduction = 0;
+    if (monthlySalary > 30000) {
+        pfDeduction = 1800;
+    } else {
+        pfDeduction = round(basicPay * 0.12);
+    }
 
     return {
         monthlyWorkingDays: workingDays,
@@ -134,13 +145,15 @@ function deriveEarnings({ monthlySalary, workingDays, attendanceDays, sickLeaveD
         lateDeduction,
         lopDays: recordedLopDays,
         lopDeduction,
+        wfhDeduction,
+        pfDeduction,
     };
 }
 
 // Compute all attendance-derived + earnings fields for one employee by reading
 // their real attendance for the month.
 async function computeSalary(employee, year, month, workingDays) {
-    const { attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction } =
+    const { attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays } =
         await readAttendance(employee._id, year, month);
     const lopDays = await readLopDays(employee._id, year, month);
 
@@ -152,13 +165,15 @@ async function computeSalary(employee, year, month, workingDays) {
         casualLeaveDays,
         lateFraction,
         lopDays,
+        wfhDeductionDays,
     });
 }
 
 function computeNetPay(r) {
     const deductions =
         (r.lopDeduction || 0) + (r.lateDeduction || 0) + (r.salaryAdvance || 0) +
-        (r.wfhDeduction || 0) + (r.officeExpenses || 0) + (r.assetDeduction || 0);
+        (r.wfhDeduction || 0) + (r.officeExpenses || 0) + (r.assetDeduction || 0) +
+        (r.pfDeduction || 0);
     // Net pay is never negative (deductions can't exceed pay into the red).
     return Math.max(0, round((r.actualPay || 0) - deductions));
 }

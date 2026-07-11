@@ -10,7 +10,7 @@ export const attendanceSchema = z.object({
     checkIn: z.coerce.date().optional(),
     checkOut: z.coerce.date().optional(),
 
-    status: z.enum(['present', 'absent', 'late', 'half-day', 'leave']),
+    status: z.enum(['present', 'absent', 'late', 'half-day', 'leave', 'wfh']),
     leaveType: z.enum(['sick', 'casual']).optional(),
 
     latitude: z.number().optional(),
@@ -25,7 +25,7 @@ const attendanceMongooseSchema = new mongoose.Schema({
     date: { type: Date, required: true },
     checkIn: { type: Date },
     checkOut: { type: Date },
-    status: { type: String, enum: ['present', 'absent', 'late', 'half-day', 'leave'], required: true },
+    status: { type: String, enum: ['present', 'absent', 'late', 'half-day', 'leave', 'wfh'], required: true },
     leaveType: { type: String, enum: ['sick', 'casual'] },
 
     latitude: { type: Number },
@@ -42,7 +42,10 @@ const attendanceMongooseSchema = new mongoose.Schema({
     // Loss of Pay for the day (admin-entered when the LOP box is checked).
     lop: { type: Number, default: 0 },
     // Pardoned LOP: kept for reference but not deducted from pay.
-    lopPardoned: { type: Boolean, default: false }
+    lopPardoned: { type: Boolean, default: false },
+
+    // Pardoned WFH: kept for reference but WFH deduction is waived
+    wfhPardoned: { type: Boolean, default: false }
 }, { timestamps: true });
 
 export default mongoose.model('Attendance', attendanceMongooseSchema);

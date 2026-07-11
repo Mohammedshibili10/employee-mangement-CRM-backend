@@ -34,6 +34,7 @@ export const getDeductions = async (req, res) => {
                 { lop: { $gt: 0 } },
                 { status: 'absent' },
                 { status: 'leave', leaveType: null },
+                { status: 'wfh' },
             ],
         }).lean();
 
@@ -57,6 +58,9 @@ export const getDeductions = async (req, res) => {
             } else if (a.status === 'leave') {
                 // Full leave with no type — unpaid, so it's a loss-of-pay day.
                 entries.push({ ...base, _id: a._id, source: 'attendance', absence: true, days: 1, reason: 'Full leave (unpaid)', pardoned: false });
+            } else if (a.status === 'wfh') {
+                // WFH — 50% of per-day salary is deducted unless pardoned.
+                entries.push({ ...base, _id: a._id, source: 'attendance', absence: false, entryType: 'wfh', days: 0.5, reason: 'Work From Home (50% deduction)', pardoned: !!a.wfhPardoned });
             } else {
                 // Unpaid absence — a loss-of-pay day (reflected in Actual Pay, not double-deducted).
                 entries.push({ ...base, _id: a._id, source: 'attendance', absence: true, days: 1, reason: 'Absent (unpaid)', pardoned: false });
