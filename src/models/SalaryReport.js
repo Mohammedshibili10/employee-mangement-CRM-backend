@@ -39,6 +39,7 @@ const salaryReportSchema = new mongoose.Schema({
     officeExpenses: { type: Number, default: 0 },
     assetDeduction: { type: Number, default: 0 },
     pfDeduction: { type: Number, default: 0 },
+    employeeEsi: { type: Number, default: 0 },
 
     netPay: { type: Number, default: 0 },
 

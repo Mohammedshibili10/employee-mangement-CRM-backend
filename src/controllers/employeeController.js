@@ -1,6 +1,8 @@
 import bcrypt from "bcryptjs";
 import Employee from "../models/Employee.js";
+import SalaryReport from "../models/SalaryReport.js";
 import User from "../models/User.js";
+import { recalcSalaryForMonth } from "./salaryController.js";
 import generateEmployeeId from "../utils/generateEmployeeId.js";
 
 export const createEmployee = async (req, res) => {
@@ -123,6 +125,13 @@ export const getEmployee = async (req, res) => {
 
             const employee = await Employee.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
                 .populate('department');
+
+            if (salary !== undefined && Number(salary) !== Number(existing.salary)) {
+                const reports = await SalaryReport.find({ employee: id });
+                for (const report of reports) {
+                    await recalcSalaryForMonth(id, report.year, report.month);
+                }
+            }
 
             // Keep the linked login account in sync when name/email change, else the
             // employee could no longer sign in or load their own profile.
