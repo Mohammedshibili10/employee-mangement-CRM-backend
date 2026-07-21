@@ -2,6 +2,7 @@ import Attendance from "../models/Attendance.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
 import { recalcSalaryForMonth } from "./salaryController.js";
+import { isLateCheckIn, minutesOfDay } from "../utils/attendanceRules.js";
 
 // Keep any existing salary report for this employee's month in sync after
 // attendance/leave changes (no manual "recalculate" needed).
@@ -19,12 +20,11 @@ const getDayRange = (date) => {
 };
 
 // Classify a check-in time the same way the geofenced check-in does.
+// On time up to and including 9:30 AM, late after that, half-day from 12:30 PM.
 const deriveStatus = (checkIn) => {
     if (!checkIn) return 'present';
-    const d = new Date(checkIn);
-    const minutesOfDay = d.getHours() * 60 + d.getMinutes();
-    if (minutesOfDay < 9 * 60) return 'present';
-    if (minutesOfDay < 12 * 60 + 30) return 'late';
+    if (!isLateCheckIn(checkIn)) return 'present';
+    if (minutesOfDay(checkIn) < 12 * 60 + 30) return 'late';
     return 'half-day';
 };
 
@@ -65,15 +65,8 @@ export const checkIn = async (req, res) => {
 
         const now = new Date();
 
-        const minutesOfDay = now.getHours() * 60 + now.getMinutes();
-        let status;
-        if (minutesOfDay < 9 * 60) {
-            status = 'present';
-        } else if (minutesOfDay < 12 * 60 + 30) {
-            status = 'late';
-        } else {
-            status = 'half-day';
-        }
+        // Same punctuality rule as an admin-entered record.
+        const status = deriveStatus(now);
 
         const attendance = await Attendance.create({
             employee: employee._id,

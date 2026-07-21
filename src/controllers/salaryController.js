@@ -2,6 +2,7 @@ import SalaryReport from "../models/SalaryReport.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LopRecord from "../models/LopRecord.js";
+import { minutesLate } from "../utils/attendanceRules.js";
 
 // Total LOP (Loss of Pay) days for an employee in a month, combining the two
 // sources that stay in sync: manual LOP entries (Deductions module) and days
@@ -40,15 +41,14 @@ const CASUAL_LEAVE_CAP = 1;
 const paidLeaveOf = (sick, casual) =>
     Math.min(sick || 0, SICK_LEAVE_CAP) + Math.min(casual || 0, CASUAL_LEAVE_CAP);
 
-// Late-arrival deduction policy — minutes late after 9:00 AM:
+// Late-arrival deduction policy — minutes late after 9:30 AM (a check-in at or
+// before 9:30 AM is on time and is never deducted):
 //   <= 40 min  -> warning only, no deduction (0)
 //   41-60 min  -> 0.25 of a day's pay
 //   61-90 min  -> 0.50 of a day's pay
 //   > 90 min   -> 1.00 (a full day's pay)
 function lateFractionFor(checkIn) {
-    if (!checkIn) return 0;
-    const d = new Date(checkIn);
-    const lateMin = (d.getHours() * 60 + d.getMinutes()) - 9 * 60;
+    const lateMin = minutesLate(checkIn);
     if (lateMin > 90) return 1;
     if (lateMin > 60) return 0.5;
     if (lateMin > 40) return 0.25;

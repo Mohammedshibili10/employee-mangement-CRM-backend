@@ -96,7 +96,7 @@ export const getEmployee = async (req, res) => {
     export const updateEmployee = async (req, res) => {
         try{
             const {id} = req.params;
-            const { name, email, department, phoneNumber, phone, designation, joiningDate, status, salary } = req.body;
+            const { name, email, department, phoneNumber, phone, designation, joiningDate, status, salary, empId } = req.body;
             // The form sends the phone as `phoneNumber`; accept plain `phone` too.
             const phoneValue = phoneNumber ?? phone;
             if(!name || !email || !department || !phoneValue || !designation || !joiningDate){
@@ -106,6 +106,20 @@ export const getEmployee = async (req, res) => {
             const existing = await Employee.findById(id);
             if(!existing){
                 return res.status(404).json({ message: 'Employee not found' });
+            }
+
+            // Employee ID is editable. It's only validated when the form sends it,
+            // so older callers that omit it keep the current ID.
+            let newEmpId;
+            if(empId !== undefined){
+                newEmpId = String(empId).trim();
+                if(!newEmpId){
+                    return res.status(400).json({ message: 'Employee ID is required' });
+                }
+                const idClash = await Employee.findOne({ _id: { $ne: id }, empId: newEmpId });
+                if(idClash){
+                    return res.status(400).json({ message: 'This Employee ID is already in use' });
+                }
             }
 
             // Don't let the edit reuse an email/phone that belongs to a DIFFERENT employee.
@@ -122,6 +136,7 @@ export const getEmployee = async (req, res) => {
             const update = { name, email, department, phone: phoneValue, designation, joiningDate };
             if(status !== undefined) update.status = status;
             if(salary !== undefined) update.salary = Number(salary) || 0;
+            if(newEmpId) update.empId = newEmpId;
 
             const employee = await Employee.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
                 .populate('department');
@@ -131,6 +146,12 @@ export const getEmployee = async (req, res) => {
                 for (const report of reports) {
                     await recalcSalaryForMonth(id, report.year, report.month);
                 }
+            }
+
+            // Salary reports keep their own copy of the Employee ID, so update them
+            // too — otherwise they would keep showing the old ID.
+            if(newEmpId && newEmpId !== existing.empId){
+                await SalaryReport.updateMany({ employee: id }, { $set: { empId: newEmpId } });
             }
 
             // Keep the linked login account in sync when name/email change, else the
