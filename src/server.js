@@ -24,6 +24,14 @@ app.get('/',(req,res)=>{
     res.send('Employee Management CRM API is running');
 })
 
+// Never let the browser cache API responses. Without this the admin UI can keep
+// showing an old salary/attendance response after a recalculation, which looks
+// exactly like a calculation bug.
+app.use('/api', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/employees', employeeRoutes);

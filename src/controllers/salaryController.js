@@ -2,7 +2,7 @@ import SalaryReport from "../models/SalaryReport.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LopRecord from "../models/LopRecord.js";
-import { minutesLate } from "../utils/attendanceRules.js";
+import { minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
 
 // Total LOP (Loss of Pay) days for an employee in a month, combining the two
 // sources that stay in sync: manual LOP entries (Deductions module) and days
@@ -47,8 +47,8 @@ const paidLeaveOf = (sick, casual) =>
 //   41-60 min  -> 0.25 of a day's pay
 //   61-90 min  -> 0.50 of a day's pay
 //   > 90 min   -> 1.00 (a full day's pay)
-function lateFractionFor(checkIn) {
-    const lateMin = minutesLate(checkIn);
+function lateFractionFor(checkIn, startMinutes) {
+    const lateMin = minutesLate(checkIn, startMinutes);
     if (lateMin > 90) return 1;
     if (lateMin > 60) return 0.5;
     if (lateMin > 40) return 0.25;
@@ -57,7 +57,7 @@ function lateFractionFor(checkIn) {
 
 // Read attendance for the month: attended days, paid leave days (sick/casual),
 // and the total late-deduction fraction from check-in times.
-async function readAttendance(employeeId, year, month) {
+async function readAttendance(employeeId, year, month, startMinutes) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const end = new Date(year, month, 0, 23, 59, 59, 999);
     const records = await Attendance.find({
@@ -66,15 +66,18 @@ async function readAttendance(employeeId, year, month) {
     });
     let attendanceDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0, wfhDeductionDays = 0;
     for (const r of records) {
-        if (r.status === 'present') {
-            // On-time full day → a full day's attendance and full pay, no penalty.
+        if (r.status === 'present' || r.status === 'late') {
+            // Any full worked day counts as a full attendance day. The late
+            // deduction is computed from the ACTUAL check-in time vs the
+            // employee's start — NOT from the 'late' label — so a day marked
+            // 'present' with a late check-in is still deducted, and an on-time
+            // (or check-in-less) day is not. lateFractionFor returns 0 when the
+            // check-in is missing or at/before the start.
             attendanceDays += 1;
-        } else if (r.status === 'late') {
-            // Full attendance day, but a late-arrival penalty from the check-in time.
-            attendanceDays += 1;
-            lateFraction += lateFractionFor(r.checkIn);
+            lateFraction += lateFractionFor(r.checkIn, startMinutes);
         } else if (r.status === 'half-day') {
-            // Half day = half an attendance day → half a day's pay.
+            // Half day = half an attendance day → half a day's pay. No extra late
+            // deduction: the half-day already reduces pay for that late arrival.
             attendanceDays += 0.5;
         } else if (r.status === 'leave') {
             if (r.leaveType === 'sick') sickLeaveDays += 1;
@@ -157,7 +160,7 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, sic
 // their real attendance for the month.
 async function computeSalary(employee, year, month, workingDays) {
     const { attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays } =
-        await readAttendance(employee._id, year, month);
+        await readAttendance(employee._id, year, month, startMinutesOf(employee));
     const lopDays = await readLopDays(employee._id, year, month);
 
     return deriveEarnings({
