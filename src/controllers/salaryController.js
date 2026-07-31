@@ -22,10 +22,38 @@ async function readLopDays(employeeId, year, month) {
 
 // ---- calculation helpers ----------------------------------------------------
 
-// Monthly working days are fixed at 30 (business rule) — the salary divisor.
-const MONTHLY_WORKING_DAYS = 30;
-function countWorkingDays() {
-    return MONTHLY_WORKING_DAYS;
+// ---- month / working day detection ------------------------------------------
+// Nothing is hardcoded — every figure is detected from the selected month and
+// year, so February follows the leap year on its own.
+//
+//   Working Days    = every day of the month, Sundays included (28/29/30/31)
+//   Attendance Days = counted from the employee's own attendance records
+//   Paid Sundays    = the month's Sundays, paid without attendance being marked
+//   Total Paid Days = Attendance Days + Paid Sundays + approved paid leave
+//
+//   Daily Salary = Monthly Salary / Working Days
+//   Gross        = Daily Salary x Total Paid Days, capped at Monthly Salary
+//   Net Pay      = Gross - PF - ESI - the other applicable deductions
+
+// Weekly off = Sunday. Single place to change if the company moves to a
+// different weekly off or starts excluding a second day.
+const WEEKLY_OFF_WEEKDAYS = [0]; // 0 = Sunday, 6 = Saturday
+const isWeeklyOff = (date) => WEEKLY_OFF_WEEKDAYS.includes(new Date(date).getDay());
+
+// MONTH DAYS — the selected month's actual calendar length.
+// June -> 30, July -> 31, February -> 28 or 29 depending on the year.
+export function daysInMonth(year, month) {
+    return new Date(year, month, 0).getDate();
+}
+
+// WORKING DAYS — EVERY day of the selected month, Sundays included. Same figure
+// as Month Days, and the salary divisor: a day's pay is salary / this.
+//
+// Sundays are inside the count but can never cost anything: they are paid days,
+// and the loss-of-pay walk below skips them, so an employee who works every
+// weekday is paid the full month.
+function countWorkingDays(year, month) {
+    return daysInMonth(year, month);
 }
 
 const round = (n) => Math.round(n || 0);
@@ -55,8 +83,15 @@ function lateFractionFor(checkIn) {
     return 0;
 }
 
-// Read attendance for the month: attended days, paid leave days (sick/casual),
-// and the total late-deduction fraction from check-in times.
+// Read a month's attendance for one employee, walking the calendar day by day.
+//
+//   attendanceDays — PRESENT DAYS from the real records, counted only on working
+//                    days (present/late = 1, half day = 0.5, WFH = 1)
+//   paidSundays    — the month's Sundays / weekly offs. Paid without attendance,
+//                    and never counted as attendance or as an absence.
+//
+// A working day with no record earns nothing — it is neither attendance nor a
+// paid day, so it simply drops out of the paid days.
 async function readAttendance(employeeId, year, month) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const end = new Date(year, month, 0, 23, 59, 59, 999);
@@ -64,27 +99,49 @@ async function readAttendance(employeeId, year, month) {
         employee: employeeId,
         date: { $gte: start, $lte: end },
     });
-    let attendanceDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0, wfhDeductionDays = 0;
-    for (const r of records) {
+
+    // Index by day-of-month so every calendar day can be looked up, including
+    // the days that carry no record at all.
+    const byDay = new Map();
+    for (const r of records) byDay.set(new Date(r.date).getDate(), r);
+
+    const totalDays = daysInMonth(year, month);
+
+    let attendanceDays = 0, paidSundays = 0;
+    let sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0, wfhDeductionDays = 0;
+
+    for (let d = 1; d <= totalDays; d++) {
+        // Sundays / weekly offs are PAID days on which no attendance is marked.
+        // They are counted separately as paid days and never as attendance.
+        if (isWeeklyOff(new Date(year, month - 1, d))) {
+            paidSundays += 1;
+            continue;
+        }
+
+        const r = byDay.get(d);
+        if (!r) continue;   // a working day with no record simply isn't paid
+
+        // ---- attendance days: only the records actually marked on working days.
         if (r.status === 'present') {
-            // On-time full day → a full day's attendance and full pay, no penalty.
             attendanceDays += 1;
         } else if (r.status === 'late') {
-            // Full attendance day, but a late-arrival penalty from the check-in time.
             attendanceDays += 1;
             lateFraction += lateFractionFor(r.checkIn);
         } else if (r.status === 'half-day') {
-            // Half day = half an attendance day → half a day's pay.
             attendanceDays += 0.5;
-        } else if (r.status === 'leave') {
-            if (r.leaveType === 'sick') sickLeaveDays += 1;
-            else if (r.leaveType === 'casual') casualLeaveDays += 1;
         } else if (r.status === 'wfh') {
             attendanceDays += 1;
             if (!r.wfhPardoned) wfhDeductionDays += 1;
+        } else if (r.status === 'leave') {
+            // Approved sick/casual leave is paid (within the monthly cap) and is
+            // added to the paid days later; 'None' leave and 'absent' are unpaid,
+            // so they simply never become attendance or paid days.
+            if (r.leaveType === 'sick') sickLeaveDays += 1;
+            else if (r.leaveType === 'casual') casualLeaveDays += 1;
         }
     }
-    return { attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays };
+
+    return { attendanceDays, paidSundays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays };
 }
 
 // Pure earnings math from attendance figures (no DB access) so it can be reused
@@ -92,47 +149,72 @@ async function readAttendance(employeeId, year, month) {
 // working days / attendance days in the salary breakdown.
 // Salary split: Basic 50% & HRA 20% of gross; LTA is 10% of Basic Pay;
 // Special Allowance is whatever is left of gross.
-// Sick/Casual leave are PAID and excluded from LOP. LOP = working days with no
-// attendance and no approved leave (unapproved absences) — deducted from pay.
-export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
-    // Gross Salary = ROUND((Salary / Monthly Days) * Attendance, 1)
-    // Pay is prorated by attendance: a full day's pay (salary / working days)
-    // multiplied by the number of days actually attended, rounded to 1 decimal.
-    const grossSalary = workingDays > 0 ? round1((monthlySalary / workingDays) * attendanceDays) : 0;
-    const basicPay = round(grossSalary * 0.5);
-    const hra = round(grossSalary * 0.2);
+//
+// The whole calculation:
+//   Daily Salary    = Monthly Salary / Working Days   (working days = all days
+//                     in the month, Sundays included)
+//   Total Paid Days = Attendance Days + Paid Sundays + approved paid leave
+//   Gross / Earned  = Daily Salary x Total Paid Days, capped at Monthly Salary
+//   Net Pay         = Gross - PF - ESI - the other applicable deductions
+//
+// Sundays are paid even though no attendance is marked on them; a working day
+// with no attendance is simply not paid.
+export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, paidSundays = 0, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
+    // A day's pay = salary / working days, and working days is every day of the
+    // month (Sundays included).
+    const perDay = workingDays > 0 ? monthlySalary / workingDays : 0;
+
+    // Only the first sick + first casual leave are paid; anything beyond the cap
+    // is unpaid and therefore simply never becomes a paid day.
+    const paidLeaveDays = paidLeaveOf(sickLeaveDays, casualLeaveDays);
+
+    // Total Paid Days = Attendance Days + Paid Sundays + approved paid leave,
+    // and never more than the month itself.
+    const paidDays = Math.min(workingDays, Math.max(0, attendanceDays + paidSundays + paidLeaveDays));
+
+    // Days of the month that earn nothing — working days with no attendance and
+    // no approved leave.
+    const lop = round2(Math.max(0, workingDays - paidDays));
+
+    // Gross / Earned Salary = a full day's pay x the paid days, and NEVER more
+    // than the agreed monthly salary.
+    const grossSalary = Math.min(round2(perDay * paidDays), monthlySalary);
+    const basicPay = round2(grossSalary * 0.5);
+    const hra = round2(grossSalary * 0.2);
     // LTA = ROUND(Basic Pay * 10 / 100, 2) — always 10% of Basic Pay.
     const lta = round2(basicPay * 0.1);
-    const specialAllowance = round1(grossSalary - basicPay - hra - lta);
+    const specialAllowance = round2(grossSalary - basicPay - hra - lta);
 
-    // A full day's pay is based on the MONTHLY salary (not the already
-    // attendance-prorated gross) — otherwise Actual Pay is prorated twice.
-    const perDay = workingDays > 0 ? monthlySalary / workingDays : 0;
-    // Only the first sick + first casual leave are paid; extra leaves are LOP.
-    const paidLeaveDays = paidLeaveOf(sickLeaveDays, casualLeaveDays);
-    const accounted = attendanceDays + paidLeaveDays;
-    const paidDays = Math.min(workingDays, accounted);
-    const lop = Math.max(0, workingDays - accounted);
-    // Actual Pay = a full day's pay * days actually paid (attendance + paid leave).
-    const actualPay = round(perDay * paidDays);
-    const lateDeduction = round(lateFraction * perDay);
+    // Actual Pay = the earned amount, likewise capped at the monthly salary.
+    // This is the figure every deduction (PF, ESI, LOP, late, WFH, advances…)
+    // comes off to give Net Pay.
+    const actualPay = Math.min(round2(perDay * paidDays), round2(monthlySalary));
+    const lateDeduction = round2(lateFraction * perDay);
     // Recorded LOP (from the LOP module) is deducted at a full day's pay per LOP day.
     const recordedLopDays = Number(lopDays) || 0;
-    const lopDeduction = round(perDay * recordedLopDays);
-    const wfhDeduction = round((perDay * 0.5) * (wfhDeductionDays || 0));
+    const lopDeduction = round2(perDay * recordedLopDays);
+    const wfhDeduction = round2((perDay * 0.5) * (wfhDeductionDays || 0));
 
+    // PF and ESI are statutory contributions on the AGREED MONTHLY salary, so
+    // they stay the same whatever the month's attendance came to.
     let pfDeduction = 0;
     if (monthlySalary > 30000) {
         pfDeduction = 1800;
     } else {
-        pfDeduction = round(basicPay * 0.12);
+        pfDeduction = round2((monthlySalary * 0.5) * 0.12);
     }
 
     const employeeEsi = monthlySalary <= 21000 ? round2(monthlySalary * 0.0075) : 0;
 
     return {
+        // The month's total calendar days, Sundays included — the divisor.
         monthlyWorkingDays: workingDays,
+        // Present days, counted from the employee's own attendance records.
         attendanceDays,
+        // Sundays / weekly offs in the month — paid without attendance.
+        paidSundays,
+        // Attendance + paid Sundays + approved leave: what the salary is paid on.
+        paidDays: round2(paidDays),
         sickLeaveDays,
         casualLeaveDays,
         paidLeaveDays,
@@ -156,7 +238,7 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, sic
 // Compute all attendance-derived + earnings fields for one employee by reading
 // their real attendance for the month.
 async function computeSalary(employee, year, month, workingDays) {
-    const { attendanceDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays } =
+    const { attendanceDays, paidSundays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays } =
         await readAttendance(employee._id, year, month);
     const lopDays = await readLopDays(employee._id, year, month);
 
@@ -164,6 +246,7 @@ async function computeSalary(employee, year, month, workingDays) {
         monthlySalary: employee.salary || 0,
         workingDays,
         attendanceDays,
+        paidSundays,
         sickLeaveDays,
         casualLeaveDays,
         lateFraction,
@@ -178,7 +261,7 @@ function computeNetPay(r) {
         (r.wfhDeduction || 0) + (r.officeExpenses || 0) + (r.assetDeduction || 0) +
         (r.pfDeduction || 0) + (r.employeeEsi || 0);
     // Net pay is never negative (deductions can't exceed pay into the red).
-    return Math.max(0, round((r.actualPay || 0) - deductions));
+    return Math.max(0, round2((r.actualPay || 0) - deductions));
 }
 
 // ---- controllers ------------------------------------------------------------
@@ -212,6 +295,14 @@ export const generateSalary = async (req, res) => {
             }
             const calc = await computeSalary(emp, year, month, workingDays);
             const doc = {
+                // Only the MANUALLY entered deductions start at zero. Anything
+                // calculated from attendance — including the WFH deduction — must
+                // keep the value computed above; zeroing it here would silently
+                // under-deduct every freshly generated month until someone
+                // happened to recalculate it.
+                salaryAdvance: 0,
+                officeExpenses: 0,
+                assetDeduction: 0,
                 ...calc,
                 employee: emp._id,
                 empId: emp.empId,
@@ -220,10 +311,6 @@ export const generateSalary = async (req, res) => {
                 departmentName: emp.department?.name || '',
                 month,
                 year,
-                salaryAdvance: 0,
-                wfhDeduction: 0,
-                officeExpenses: 0,
-                assetDeduction: 0,
             };
             doc.netPay = computeNetPay(doc);
             await SalaryReport.create(doc);
@@ -289,6 +376,8 @@ export const updateSalaryReport = async (req, res) => {
                 monthlySalary: report.monthlySalary || 0,
                 workingDays: wd,
                 attendanceDays: att,
+                // An overridden attendance implies the rest of the month is lost.
+                paidSundays: report.paidSundays || 0,
                 sickLeaveDays: report.sickLeaveDays || 0,
                 casualLeaveDays: report.casualLeaveDays || 0,
                 lopDays: report.lopDays || 0,
@@ -320,8 +409,9 @@ export const recalcSalaryForMonth = async (employeeId, year, month) => {
         if (!report) return;
         const employee = await Employee.findById(employeeId);
         if (!employee) return;
-        // Working days are fixed at 30 (not the stored/overridden value).
-        const workingDays = MONTHLY_WORKING_DAYS;
+        // Working days are re-detected from the payroll period, so the figure
+        // always matches the month (and ignores any stored/overridden value).
+        const workingDays = countWorkingDays(year, month);
         const calc = await computeSalary(employee, year, month, workingDays);
         Object.assign(report, calc);
         report.netPay = computeNetPay(report);

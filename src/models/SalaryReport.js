@@ -11,9 +11,16 @@ const salaryReportSchema = new mongoose.Schema({
     month: { type: Number, required: true },  // 1-12
     year: { type: Number, required: true },
 
-    // Attendance-derived
+    // Attendance-derived, both detected from the payroll period:
+    //   monthlyWorkingDays = the month's total calendar days, Sundays included
+    //                        (28/29/30/31) — also the salary divisor
+    //   attendanceDays     = present days, counted from the attendance records
     monthlyWorkingDays: { type: Number, default: 0 },
     attendanceDays: { type: Number, default: 0 },
+    // Sundays / weekly offs in the month — paid without attendance being marked.
+    paidSundays: { type: Number, default: 0 },
+    // Attendance + paid Sundays + approved leave: what the salary is paid on.
+    paidDays: { type: Number, default: 0 },
     sickLeaveDays: { type: Number, default: 0 },
     casualLeaveDays: { type: Number, default: 0 },
     paidLeaveDays: { type: Number, default: 0 },
