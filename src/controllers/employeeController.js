@@ -37,10 +37,14 @@ export const createEmployee = async (req, res) => {
             return res.status(400).json({ message: 'This Employee ID is already in use' });
         }
 
+        const { workStartTime, workEndTime } = req.body;
         const employee = await Employee.create({
             ...req.body,
             empId,
             phone: phoneNumber,
+            // Fall back to the company default when blank/omitted.
+            workStartTime: workStartTime?.trim() ? workStartTime.trim() : '09:30',
+            workEndTime: workEndTime?.trim() ? workEndTime.trim() : '18:00',
             onboarding: {
                 created: true,
                 idGenerated: true,
@@ -96,7 +100,7 @@ export const getEmployee = async (req, res) => {
     export const updateEmployee = async (req, res) => {
         try{
             const {id} = req.params;
-            const { name, email, department, phoneNumber, phone, designation, joiningDate, status, salary, empId } = req.body;
+            const { name, email, department, phoneNumber, phone, designation, joiningDate, status, salary, empId, workStartTime, workEndTime } = req.body;
             // The form sends the phone as `phoneNumber`; accept plain `phone` too.
             const phoneValue = phoneNumber ?? phone;
             if(!name || !email || !department || !phoneValue || !designation || !joiningDate){
@@ -131,17 +135,31 @@ export const getEmployee = async (req, res) => {
                 return res.status(400).json({ message: 'Another employee already uses this email or phone number' });
             }
 
+            // Working hours are editable; only validated when sent (HH:MM, 24h).
+            const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+            for (const [label, val] of [['start', workStartTime], ['end', workEndTime]]) {
+                if (val !== undefined && !TIME_RE.test(String(val).trim())) {
+                    return res.status(400).json({ message: `Invalid work ${label} time (use HH:MM, 24-hour)` });
+                }
+            }
+
             // Build the update explicitly so every field maps to the schema
             // (phoneNumber -> phone) and unknown/stray fields are never written.
             const update = { name, email, department, phone: phoneValue, designation, joiningDate };
             if(status !== undefined) update.status = status;
             if(salary !== undefined) update.salary = Number(salary) || 0;
             if(newEmpId) update.empId = newEmpId;
+            if(workStartTime !== undefined) update.workStartTime = String(workStartTime).trim();
+            if(workEndTime !== undefined) update.workEndTime = String(workEndTime).trim();
 
             const employee = await Employee.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
                 .populate('department');
 
-            if (salary !== undefined && Number(salary) !== Number(existing.salary)) {
+            // Recalculate salary when anything that feeds it changes: the salary
+            // itself, or the start time (which drives the late-arrival deduction).
+            const salaryChanged = salary !== undefined && Number(salary) !== Number(existing.salary);
+            const startChanged = update.workStartTime !== undefined && update.workStartTime !== existing.workStartTime;
+            if (salaryChanged || startChanged) {
                 const reports = await SalaryReport.find({ employee: id });
                 for (const report of reports) {
                     await recalcSalaryForMonth(id, report.year, report.month);

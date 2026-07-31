@@ -2,7 +2,7 @@ import Attendance from "../models/Attendance.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
 import { recalcSalaryForMonth } from "./salaryController.js";
-import { isLateCheckIn, minutesOfDay } from "../utils/attendanceRules.js";
+import { deriveStatusFor, overtimeFor, startMinutesOf, endMinutesOf } from "../utils/attendanceRules.js";
 
 // Keep any existing salary report for this employee's month in sync after
 // attendance/leave changes (no manual "recalculate" needed).
@@ -19,24 +19,11 @@ const getDayRange = (date) => {
     return { start, end };
 };
 
-// Classify a check-in time the same way the geofenced check-in does.
-// On time up to and including 9:30 AM, late after that, half-day from 12:30 PM.
-const deriveStatus = (checkIn) => {
-    if (!checkIn) return 'present';
-    if (!isLateCheckIn(checkIn)) return 'present';
-    if (minutesOfDay(checkIn) < 12 * 60 + 30) return 'late';
-    return 'half-day';
-};
-
-// Overtime is any check-out after 6:00 PM.
-const computeOvertime = (checkOut) => {
-    if (!checkOut) return { overtime: false, overtimeMinutes: 0 };
-    const d = new Date(checkOut);
-    const minutesOfDay = d.getHours() * 60 + d.getMinutes();
-    const sixPm = 18 * 60;
-    const overtime = minutesOfDay > sixPm;
-    return { overtime, overtimeMinutes: overtime ? minutesOfDay - sixPm : 0 };
-};
+// Attendance status / overtime are derived from the EMPLOYEE'S own working
+// hours (deriveStatusFor / overtimeFor in attendanceRules). These thin wrappers
+// resolve an employee's start/end and delegate, so the callers stay readable.
+const deriveStatus = (checkIn, employee) => deriveStatusFor(checkIn, startMinutesOf(employee));
+const computeOvertime = (checkOut, employee) => overtimeFor(checkOut, endMinutesOf(employee));
 
 export const checkIn = async (req, res) => {
     try {
@@ -65,8 +52,9 @@ export const checkIn = async (req, res) => {
 
         const now = new Date();
 
-        // Same punctuality rule as an admin-entered record.
-        const status = deriveStatus(now);
+        // Same punctuality rule as an admin-entered record, using this
+        // employee's own working hours.
+        const status = deriveStatus(now, employee);
 
         const attendance = await Attendance.create({
             employee: employee._id,
@@ -115,10 +103,8 @@ export const checkOut = async (req, res) => {
 
         const checkOutTime = new Date();
 
-        const minutesOfDay = checkOutTime.getHours() * 60 + checkOutTime.getMinutes();
-        const sixPm = 18 * 60;
-        const overtime = minutesOfDay > sixPm;
-        const overtimeMinutes = overtime ? minutesOfDay - sixPm : 0;
+        // Overtime is measured against this employee's own end time.
+        const { overtime, overtimeMinutes } = computeOvertime(checkOutTime, employee);
 
         attendance.checkOut = checkOutTime;
         attendance.checkOutLatitude = latitude;
@@ -152,6 +138,12 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Invalid leave type' });
         }
 
+        // Load the employee so status/overtime use their own working hours.
+        const employeeDoc = await Employee.findById(employee);
+        if (!employeeDoc) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+
         const attendanceDate = date ? new Date(date) : new Date();
 
         const { start, end } = getDayRange(attendanceDate);
@@ -166,8 +158,8 @@ export const markAttendance = async (req, res) => {
         // A leave record (Sick/Casual, or a typeless "None" full leave) has no
         // check-in/out; a worked day derives its status from the check-in.
         const isLeave = !!leaveType || status === 'leave';
-        const finalStatus = isLeave ? 'leave' : (status || deriveStatus(checkIn));
-        const { overtime, overtimeMinutes } = isLeave ? { overtime: false, overtimeMinutes: 0 } : computeOvertime(checkOut);
+        const finalStatus = isLeave ? 'leave' : (status || deriveStatus(checkIn, employeeDoc));
+        const { overtime, overtimeMinutes } = isLeave ? { overtime: false, overtimeMinutes: 0 } : computeOvertime(checkOut, employeeDoc);
 
         const attendance = await Attendance.create({
             employee,
@@ -206,6 +198,9 @@ export const updateAttendance = async (req, res) => {
             return res.status(404).json({ message: 'Attendance record not found' });
         }
 
+        // The employee's own working hours drive derived status / overtime below.
+        const employeeDoc = await Employee.findById(attendance.employee);
+
         if (date) attendance.date = new Date(date);
 
         // A full leave when the status is 'leave' OR a leave type is given.
@@ -224,8 +219,8 @@ export const updateAttendance = async (req, res) => {
             attendance.leaveType = undefined;
             if (checkIn !== undefined) attendance.checkIn = checkIn ? new Date(checkIn) : null;
             if (checkOut !== undefined) attendance.checkOut = checkOut ? new Date(checkOut) : null;
-            attendance.status = status || deriveStatus(attendance.checkIn);
-            const { overtime, overtimeMinutes } = computeOvertime(attendance.checkOut);
+            attendance.status = status || deriveStatus(attendance.checkIn, employeeDoc);
+            const { overtime, overtimeMinutes } = computeOvertime(attendance.checkOut, employeeDoc);
             attendance.overtime = overtime;
             attendance.overtimeMinutes = overtimeMinutes;
             if (lop !== undefined) attendance.lop = Number(lop) || 0;

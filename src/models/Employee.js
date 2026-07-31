@@ -9,6 +9,10 @@ export const employeeSchema = z.object({
     department: z.string().min(1, "department is required"),
     designation: z.string().min(1, "designation is required"),
     salary: z.number().min(0, "salary must be a positive number").optional(),
+    // Per-employee working hours as "HH:MM" (24-hour). Attendance rules (late,
+    // half-day, overtime, deductions) follow these instead of a global timing.
+    workStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "start time must be HH:MM").optional(),
+    workEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "end time must be HH:MM").optional(),
     joiningDate: z.coerce.date(),
     status: z.enum(['active', 'inactive', 'terminated']).default('active'),
     profilePhoto: z.string().optional(),
@@ -30,6 +34,10 @@ const employeeMongooseSchema = new mongoose.Schema({
     department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true },
     designation: { type: String, required: true },
     salary: { type: Number, default: 0 },
+    // Working hours (24-hour "HH:MM"). Default to the company-wide 09:30-18:00 so
+    // existing employees and any left blank behave exactly as before.
+    workStartTime: { type: String, default: '09:30' },
+    workEndTime: { type: String, default: '18:00' },
     joiningDate: { type: Date, required: true },
     status: { type: String, enum: ['active', 'inactive', 'terminated'], default: 'active' },
     profilePhoto: { type: String },
