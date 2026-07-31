@@ -92,11 +92,11 @@ function lateFractionFor(checkIn, startMinutes) {
 //
 // A working day with no record earns nothing — it is neither attendance nor a
 // paid day, so it simply drops out of the paid days.
-async function readAttendance(employeeId, year, month) {
+async function readAttendance(employee, year, month, startMinutes) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const end = new Date(year, month, 0, 23, 59, 59, 999);
     const records = await Attendance.find({
-        employee: employeeId,
+        employee: employee._id ?? employee,
         date: { $gte: start, $lte: end },
     });
 
@@ -107,41 +107,75 @@ async function readAttendance(employeeId, year, month) {
 
     const totalDays = daysInMonth(year, month);
 
-    let attendanceDays = 0, paidSundays = 0;
+    // EMPLOYMENT WINDOW — the month only counts from the employee's joining date.
+    // Someone who joined on the 17th was never due to work the 1st to the 16th,
+    // so those days are not paid Sundays and above all are NOT a loss of pay.
+    // Their salary is simply prorated to the days they were actually employed.
+    const joining = employee?.joiningDate ? new Date(employee.joiningDate) : null;
+    let firstEmployedDay = 1;
+    if (joining) {
+        const jYear = joining.getFullYear();
+        const jMonth = joining.getMonth() + 1;
+        if (jYear > year || (jYear === year && jMonth > month)) {
+            firstEmployedDay = totalDays + 1;      // not employed at all this month
+        } else if (jYear === year && jMonth === month) {
+            firstEmployedDay = joining.getDate();  // joined part-way through
+        }
+    }
+
+    // Real attendance always wins over the joining date. If someone has records
+    // from before the date on their profile then they evidently were working, and
+    // the joining date is the thing that is wrong — never drop a day they were
+    // actually marked present for, or the fix would quietly cut their pay.
+    for (const day of byDay.keys()) {
+        if (day < firstEmployedDay) firstEmployedDay = day;
+    }
+
+    let attendanceDays = 0, paidSundays = 0, employedDays = 0;
     let sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0, wfhDeductionDays = 0;
 
-    for (let d = 1; d <= totalDays; d++) {
+    // Start at the joining day: nothing before it belongs to this employee.
+    for (let d = firstEmployedDay; d <= totalDays; d++) {
+        employedDays += 1;
+
         // Sundays / weekly offs are PAID days on which no attendance is marked.
-        // They are counted separately as paid days and never as attendance.
+        // They are counted separately as paid days, and are never attendance and
+        // never loss of pay.
         if (isWeeklyOff(new Date(year, month - 1, d))) {
             paidSundays += 1;
             continue;
         }
 
+        // A working day with NO attendance record earns nothing — it becomes a
+        // loss-of-pay day. It is never written off just because it is late in
+        // the month; if the record is not there, the day was not worked.
         const r = byDay.get(d);
-        if (!r) continue;   // a working day with no record simply isn't paid
+        if (!r) continue;
 
         // ---- attendance days: only the records actually marked on working days.
         if (r.status === 'present') {
             attendanceDays += 1;
         } else if (r.status === 'late') {
             attendanceDays += 1;
-            lateFraction += lateFractionFor(r.checkIn);
+            lateFraction += lateFractionFor(r.checkIn, startMinutes);
         } else if (r.status === 'half-day') {
-            attendanceDays += 0.5;
+            attendanceDays += 0.5;      // the other half is lost
         } else if (r.status === 'wfh') {
             attendanceDays += 1;
             if (!r.wfhPardoned) wfhDeductionDays += 1;
         } else if (r.status === 'leave') {
             // Approved sick/casual leave is paid (within the monthly cap) and is
-            // added to the paid days later; 'None' leave and 'absent' are unpaid,
-            // so they simply never become attendance or paid days.
+            // added to the paid days later. 'None' leave and 'absent' are unpaid,
+            // so they add nothing and fall straight into the loss of pay.
             if (r.leaveType === 'sick') sickLeaveDays += 1;
             else if (r.leaveType === 'casual') casualLeaveDays += 1;
         }
     }
 
-    return { attendanceDays, paidSundays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays };
+    return {
+        attendanceDays, paidSundays, employedDays,
+        sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays,
+    };
 }
 
 // Pure earnings math from attendance figures (no DB access) so it can be reused
@@ -159,7 +193,7 @@ async function readAttendance(employeeId, year, month) {
 //
 // Sundays are paid even though no attendance is marked on them; a working day
 // with no attendance is simply not paid.
-export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, paidSundays = 0, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
+export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, paidSundays = 0, employedDays = null, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
     // A day's pay = salary / working days, and working days is every day of the
     // month (Sundays included).
     const perDay = workingDays > 0 ? monthlySalary / workingDays : 0;
@@ -168,13 +202,20 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
     // is unpaid and therefore simply never becomes a paid day.
     const paidLeaveDays = paidLeaveOf(sickLeaveDays, casualLeaveDays);
 
-    // Total Paid Days = Attendance Days + Paid Sundays + approved paid leave,
-    // and never more than the month itself.
-    const paidDays = Math.min(workingDays, Math.max(0, attendanceDays + paidSundays + paidLeaveDays));
+    // Days of the month this employee was actually on the payroll for. The whole
+    // month, unless they joined part-way through — then only from the joining day.
+    const daysOnPayroll = employedDays != null ? employedDays : workingDays;
 
-    // Days of the month that earn nothing — working days with no attendance and
-    // no approved leave.
-    const lop = round2(Math.max(0, workingDays - paidDays));
+    // Total Paid Days = Attendance Days + Paid Sundays + approved paid leave,
+    // and never more than the days they were employed for.
+    const paidDays = Math.min(daysOnPayroll, Math.max(0, attendanceDays + paidSundays + paidLeaveDays));
+
+    // LOSS OF PAY = Working Days − Present Days − Paid Leaves − Paid Sundays
+    //
+    // i.e. every day on the payroll that is not covered by attendance, an
+    // approved leave, or a paid Sunday. A working day with no attendance record
+    // counts here — it is never written off just because it is late in the month.
+    const lop = round2(Math.max(0, daysOnPayroll - paidDays));
 
     // Gross / Earned Salary = a full day's pay x the paid days, and NEVER more
     // than the agreed monthly salary.
@@ -238,8 +279,8 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
 // Compute all attendance-derived + earnings fields for one employee by reading
 // their real attendance for the month.
 async function computeSalary(employee, year, month, workingDays) {
-    const { attendanceDays, paidSundays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays } =
-        await readAttendance(employee._id, year, month);
+    const { attendanceDays, paidSundays, employedDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays } =
+        await readAttendance(employee, year, month, startMinutesOf(employee));
     const lopDays = await readLopDays(employee._id, year, month);
 
     return deriveEarnings({
@@ -252,6 +293,7 @@ async function computeSalary(employee, year, month, workingDays) {
         lateFraction,
         lopDays,
         wfhDeductionDays,
+        employedDays,
     });
 }
 
