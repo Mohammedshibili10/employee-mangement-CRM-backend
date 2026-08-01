@@ -382,6 +382,16 @@ export const generateSalary = async (req, res) => {
 
         const empFilter = {};
         if (department) empFilter.department = department;
+
+        // Only employees who were on the payroll during this month. Someone who
+        // left mid-month still gets their final payslip (their last working day
+        // falls inside it); someone who left earlier is skipped entirely, so no
+        // salary is ever generated for a period after they had gone.
+        empFilter.$or = [
+            { status: 'active' },
+            { lastWorkingDate: { $gte: new Date(year, month - 1, 1) } },
+        ];
+
         const employees = await Employee.find(empFilter).populate('department');
 
         const workingDays = countWorkingDays(year, month);
@@ -432,12 +442,33 @@ export const generateSalary = async (req, res) => {
 
 export const getSalaryReports = async (req, res) => {
     try {
-        const { month, year, employee, department } = req.query;
+        const { month, year, employee, department, includeInactive } = req.query;
         const filter = {};
         if (month) filter.month = Number(month);
         if (year) filter.year = Number(year);
         if (employee) filter.employee = employee;
         if (department) filter.department = department;
+
+        // An employee who has left stays on the report for the month they were
+        // still working — someone who left on 15 July belongs in July's payroll —
+        // and only drops out from the following month. Reports are never deleted,
+        // so every past month keeps the people who were there at the time.
+        if (String(includeInactive) !== 'true') {
+            const monthStart = (month && year) ? new Date(Number(year), Number(month) - 1, 1) : null;
+            const onPayroll = monthStart
+                ? { $or: [{ status: 'active' }, { lastWorkingDate: { $gte: monthStart } }] }
+                : { status: 'active' };
+
+            const visibleIds = await Employee.find(onPayroll).distinct('_id');
+            if (employee) {
+                const visible = visibleIds.some((id) => String(id) === String(employee));
+                if (!visible) {
+                    return res.status(200).json({ reports: [], message: 'Salary reports retrieved successfully' });
+                }
+            } else {
+                filter.employee = { $in: visibleIds };
+            }
+        }
 
         const reports = await SalaryReport.find(filter).sort({ createdAt: -1 });
         return res.status(200).json({ reports, message: 'Salary reports retrieved successfully' });

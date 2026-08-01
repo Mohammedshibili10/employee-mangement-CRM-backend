@@ -70,7 +70,33 @@ export const createEmployee = async (req, res) => {
 
 export const getEmployees = async (req, res) => {
     try{
-        const employees = await Employee.find().populate('department');
+        // Who counts as "on the payroll" depends on the period being looked at.
+        //
+        //   no period given  -> active employees only (generic dropdowns)
+        //   month + year     -> everyone employed at ANY point in that month, so
+        //                       someone who left on 15 July still appears in July
+        //                       and disappears from August onwards
+        //   includeInactive  -> everyone (the Employees page, to reactivate)
+        //
+        // Records are never deleted, so past months always keep the people who
+        // were there at the time.
+        const { includeInactive, month, year } = req.query;
+
+        let filter;
+        if (String(includeInactive) === 'true') {
+            filter = {};
+        } else if (month && year) {
+            filter = {
+                $or: [
+                    { status: 'active' },
+                    { lastWorkingDate: { $gte: new Date(Number(year), Number(month) - 1, 1) } },
+                ],
+            };
+        } else {
+            filter = { status: 'active' };
+        }
+
+        const employees = await Employee.find(filter).populate('department');
         return res.status(200).json({ employees, message: 'Employees retrieved successfully' });
     } catch (error) {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
@@ -147,6 +173,17 @@ export const getEmployee = async (req, res) => {
             // (phoneNumber -> phone) and unknown/stray fields are never written.
             const update = { name, email, department, phone: phoneValue, designation, joiningDate };
             if(status !== undefined) update.status = status;
+
+            // Going inactive closes the employee's payroll period: stamp the last
+            // working day so attendance and salary stay scoped to the time they
+            // were actually employed. Reactivating clears it and reopens them.
+            if (status !== undefined && status !== existing.status) {
+                if (status === 'active') {
+                    update.lastWorkingDate = null;
+                } else if (!existing.lastWorkingDate) {
+                    update.lastWorkingDate = new Date();
+                }
+            }
             if(salary !== undefined) update.salary = Number(salary) || 0;
             if(newEmpId) update.empId = newEmpId;
             if(workStartTime !== undefined) update.workStartTime = String(workStartTime).trim();
