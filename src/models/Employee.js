@@ -39,6 +39,10 @@ const employeeMongooseSchema = new mongoose.Schema({
     workStartTime: { type: String, default: '09:30' },
     workEndTime: { type: String, default: '18:00' },
     joiningDate: { type: Date, required: true },
+    // Last working day, when the employee has left. Payroll stops counting the
+    // month here: days after it are neither attendance nor loss of pay, exactly
+    // as days before the joining date are ignored.
+    lastWorkingDate: { type: Date },
     status: { type: String, enum: ['active', 'inactive', 'terminated'], default: 'active' },
     profilePhoto: { type: String },
     whatsappSent: { type: Boolean, default: false },

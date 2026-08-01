@@ -45,7 +45,12 @@ const attendanceMongooseSchema = new mongoose.Schema({
     lopPardoned: { type: Boolean, default: false },
 
     // Pardoned WFH: kept for reference but WFH deduction is waived
-    wfhPardoned: { type: Boolean, default: false }
+    wfhPardoned: { type: Boolean, default: false },
+
+    // Where the record came from. Empty for anything entered through the app;
+    // set to a batch name by a bulk import, so an import can be identified and
+    // rolled back without touching the records the app created.
+    source: { type: String }
 }, { timestamps: true });
 
 export default mongoose.model('Attendance', attendanceMongooseSchema);

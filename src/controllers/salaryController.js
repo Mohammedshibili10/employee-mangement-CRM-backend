@@ -102,8 +102,24 @@ async function readAttendance(employee, year, month, startMinutes) {
 
     // Index by day-of-month so every calendar day can be looked up, including
     // the days that carry no record at all.
+    //
+    // A day should only ever hold one record, but the `date` field is written
+    // with a mix of time-of-day values (day-start for admin entries, a real
+    // timestamp for self check-ins), so a duplicate can slip past the once-a-day
+    // guard. If a day does end up with more than one, take the most recently
+    // updated and count it ONCE — never sum two records into a day, and never
+    // silently depend on whichever happened to be read last.
     const byDay = new Map();
-    for (const r of records) byDay.set(new Date(r.date).getDate(), r);
+    for (const r of records) {
+        const day = new Date(r.date).getDate();
+        const existing = byDay.get(day);
+        if (!existing) {
+            byDay.set(day, r);
+            continue;
+        }
+        const stamp = (x) => new Date(x.updatedAt || x.createdAt || x.date).getTime();
+        if (stamp(r) >= stamp(existing)) byDay.set(day, r);
+    }
 
     const totalDays = daysInMonth(year, month);
 
@@ -131,11 +147,47 @@ async function readAttendance(employee, year, month, startMinutes) {
         if (day < firstEmployedDay) firstEmployedDay = day;
     }
 
+    // ...and the window closes on the last working day. Someone who left on the
+    // 16th was never due to work the 17th onwards, so those days are not paid
+    // Sundays and are NOT a loss of pay.
+    //
+    // Unlike the joining date, this one is authoritative: a leaving date is only
+    // ever set deliberately, so any record dated after it is the mistake (a stray
+    // mark on a timesheet) and is ignored rather than re-opening the month.
+    const leaving = employee?.lastWorkingDate ? new Date(employee.lastWorkingDate) : null;
+    let lastEmployedDay = totalDays;
+    if (leaving) {
+        const lYear = leaving.getFullYear();
+        const lMonth = leaving.getMonth() + 1;
+        if (lYear < year || (lYear === year && lMonth < month)) {
+            lastEmployedDay = 0;                  // already gone before this month
+        } else if (lYear === year && lMonth === month) {
+            lastEmployedDay = leaving.getDate();  // left part-way through
+        }
+    }
+
+    // The month can never run past TODAY. A day that has not happened yet is not
+    // an employed day: it earns nothing, not even a paid Sunday, and it is not a
+    // loss of pay either. Without this a payroll run for a future month would
+    // quietly pay everyone for that month's Sundays.
+    //
+    // Today itself is still in progress, so its attendance may simply not be
+    // marked yet — counting it would show a loss of pay for a day the employee
+    // is still working. It is therefore included only once it carries a record.
+    const today = new Date();
+    if (new Date(year, month - 1, 1) > today) {
+        lastEmployedDay = 0;                                  // month hasn't started
+    } else if (today.getFullYear() === year && today.getMonth() + 1 === month) {
+        const todayDay = today.getDate();
+        const upTo = byDay.has(todayDay) ? todayDay : todayDay - 1;
+        lastEmployedDay = Math.min(lastEmployedDay, upTo);
+    }
+
     let attendanceDays = 0, paidSundays = 0, employedDays = 0;
     let sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0, wfhDeductionDays = 0;
 
     // Start at the joining day: nothing before it belongs to this employee.
-    for (let d = firstEmployedDay; d <= totalDays; d++) {
+    for (let d = firstEmployedDay; d <= lastEmployedDay; d++) {
         employedDays += 1;
 
         // Sundays / weekly offs are PAID days on which no attendance is marked.
@@ -237,15 +289,15 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
     const wfhDeduction = round2((perDay * 0.5) * (wfhDeductionDays || 0));
 
     // PF and ESI are statutory contributions on the AGREED MONTHLY salary, so
-    // they stay the same whatever the month's attendance came to.
+    // they stay the same whatever the month's attendance came to — but there is
+    // nothing to contribute on a month with no paid days at all (not yet started,
+    // or the employee was not on the payroll for any of it).
     let pfDeduction = 0;
-    if (monthlySalary > 30000) {
-        pfDeduction = 1800;
-    } else {
-        pfDeduction = round2((monthlySalary * 0.5) * 0.12);
+    let employeeEsi = 0;
+    if (paidDays > 0) {
+        pfDeduction = monthlySalary > 30000 ? 1800 : round2((monthlySalary * 0.5) * 0.12);
+        employeeEsi = monthlySalary <= 21000 ? round2(monthlySalary * 0.0075) : 0;
     }
-
-    const employeeEsi = monthlySalary <= 21000 ? round2(monthlySalary * 0.0075) : 0;
 
     return {
         // The month's total calendar days, Sundays included — the divisor.
@@ -318,6 +370,14 @@ export const generateSalary = async (req, res) => {
 
         if (!month || month < 1 || month > 12 || !year) {
             return res.status(400).json({ message: 'Valid month and year are required' });
+        }
+
+        // A month that has not started has no attendance to pay on, so generating
+        // it would only produce empty reports that look like real payroll.
+        if (new Date(year, month - 1, 1) > new Date()) {
+            return res.status(400).json({
+                message: 'That payroll month has not started yet — there is no attendance to generate salary from.',
+            });
         }
 
         const empFilter = {};
