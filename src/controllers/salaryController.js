@@ -453,11 +453,12 @@ export const getSalaryReports = async (req, res) => {
         // still working — someone who left on 15 July belongs in July's payroll —
         // and only drops out from the following month. Reports are never deleted,
         // so every past month keeps the people who were there at the time.
-        if (String(includeInactive) !== 'true') {
-            const monthStart = (month && year) ? new Date(Number(year), Number(month) - 1, 1) : null;
-            const onPayroll = monthStart
-                ? { $or: [{ status: 'active' }, { lastWorkingDate: { $gte: monthStart } }] }
-                : { status: 'active' };
+        // With no period given the caller wants the whole history, so nothing is
+        // filtered out — a payslip that has been generated is a completed record
+        // and must stay visible whatever the employee's status is today.
+        if (String(includeInactive) !== 'true' && month && year) {
+            const monthStart = new Date(Number(year), Number(month) - 1, 1);
+            const onPayroll = { $or: [{ status: 'active' }, { lastWorkingDate: { $gte: monthStart } }] };
 
             const visibleIds = await Employee.find(onPayroll).distinct('_id');
             if (employee) {

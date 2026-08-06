@@ -170,7 +170,9 @@ export const markAttendance = async (req, res) => {
             leaveType: leaveType || undefined,
             overtime,
             overtimeMinutes,
-            lop: isLeave ? 0 : (Number(lop) || 0),
+            // LOP can be recorded on any day, leave included — an admin may need
+            // to dock a leave day as loss of pay.
+            lop: Number(lop) || 0,
         });
 
         await syncSalary(employee, attendanceDate);
@@ -213,7 +215,9 @@ export const updateAttendance = async (req, res) => {
             attendance.checkOut = null;
             attendance.overtime = false;
             attendance.overtimeMinutes = 0;
-            attendance.lop = 0;
+            // LOP is kept on a leave day: it is a deliberate entry, not something
+            // the day type should silently clear.
+            if (lop !== undefined) attendance.lop = Number(lop) || 0;
         } else {
             // A worked day — clear any leave type and use the given/derived status.
             attendance.leaveType = undefined;

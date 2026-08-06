@@ -3,10 +3,10 @@ import Employee from "../models/Employee.js";
 
 export const getEmployeeReport = async (req, res) => {
     try{
-        // Matches the rest of the system: inactive employees are hidden unless
-        // they are explicitly asked for.
-        const includeInactive = String(req.query.includeInactive) === 'true';
-        const employees = await Employee.find(includeInactive ? {} : { status: 'active' }).populate('department');
+        // This is a historical report, so it lists EVERY employee — including
+        // those who have left. Their Status column already says whether they are
+        // active; hiding them here would erase them from the record.
+        const employees = await Employee.find().populate('department');
         return res.status(200).json({ employees, message: 'Employee report retrieved successfully' });
     } catch (error) {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
