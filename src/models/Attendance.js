@@ -41,6 +41,9 @@ const attendanceMongooseSchema = new mongoose.Schema({
 
     // Loss of Pay for the day (admin-entered when the LOP box is checked).
     lop: { type: Number, default: 0 },
+    // Why the LOP was applied. Entered alongside it on the attendance form and
+    // shown in the Deductions list, so a deduction is never unexplained.
+    lopReason: { type: String, default: '' },
     // Pardoned LOP: kept for reference but not deducted from pay.
     lopPardoned: { type: Boolean, default: false },
 

@@ -10,6 +10,7 @@ import departmentRoutes from './routes/departmentRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import salaryRoutes from './routes/salaryRoutes.js';
 import lopRoutes from './routes/lopRoutes.js';
+import salaryAdvanceRoutes from './routes/salaryAdvanceRoutes.js';
 
 dotenv.config();
 
@@ -39,6 +40,7 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/salary', salaryRoutes);
 app.use('/api/lop', lopRoutes);
+app.use('/api/salary-advance', salaryAdvanceRoutes);
 
 app.listen(PORT,()=>{
     connectDB();

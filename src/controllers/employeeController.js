@@ -126,7 +126,7 @@ export const getEmployee = async (req, res) => {
     export const updateEmployee = async (req, res) => {
         try{
             const {id} = req.params;
-            const { name, email, department, phoneNumber, phone, designation, joiningDate, status, salary, empId, workStartTime, workEndTime } = req.body;
+            const { name, email, department, phoneNumber, phone, designation, joiningDate, status, employmentStatus, salary, empId, workStartTime, workEndTime } = req.body;
             // The form sends the phone as `phoneNumber`; accept plain `phone` too.
             const phoneValue = phoneNumber ?? phone;
             if(!name || !email || !department || !phoneValue || !designation || !joiningDate){
@@ -173,6 +173,7 @@ export const getEmployee = async (req, res) => {
             // (phoneNumber -> phone) and unknown/stray fields are never written.
             const update = { name, email, department, phone: phoneValue, designation, joiningDate };
             if(status !== undefined) update.status = status;
+            if(employmentStatus !== undefined) update.employmentStatus = employmentStatus;
 
             // Going inactive closes the employee's payroll period: stamp the last
             // working day so attendance and salary stay scoped to the time they

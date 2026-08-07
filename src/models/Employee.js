@@ -15,6 +15,7 @@ export const employeeSchema = z.object({
     workEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "end time must be HH:MM").optional(),
     joiningDate: z.coerce.date(),
     status: z.enum(['active', 'inactive', 'terminated']).default('active'),
+    employmentStatus: z.enum(['probation', 'permanent']).default('probation'),
     profilePhoto: z.string().optional(),
     whatsappSent: z.boolean().default(false),
     onboarding: z.object({
@@ -44,6 +45,11 @@ const employeeMongooseSchema = new mongoose.Schema({
     // as days before the joining date are ignored.
     lastWorkingDate: { type: Date },
     status: { type: String, enum: ['active', 'inactive', 'terminated'], default: 'active' },
+    // Employment status. New joiners start on probation (3 months) and are moved
+    // to permanent by an admin once it is complete. Only permanent employees earn
+    // the monthly paid-leave allowance (1 CL + 1 SL); on probation every leave day
+    // is loss of pay.
+    employmentStatus: { type: String, enum: ['probation', 'permanent'], default: 'probation' },
     profilePhoto: { type: String },
     whatsappSent: { type: Boolean, default: false },
     onboarding: {

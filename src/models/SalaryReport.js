@@ -21,6 +21,9 @@ const salaryReportSchema = new mongoose.Schema({
     paidSundays: { type: Number, default: 0 },
     // Attendance + paid Sundays + approved leave: what the salary is paid on.
     paidDays: { type: Number, default: 0 },
+    // Total leave days taken in the month (all types). Of these only the first
+    // sick + first casual are paid; the rest fall into LOP.
+    leaveDays: { type: Number, default: 0 },
     sickLeaveDays: { type: Number, default: 0 },
     casualLeaveDays: { type: Number, default: 0 },
     paidLeaveDays: { type: Number, default: 0 },

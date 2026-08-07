@@ -124,7 +124,7 @@ export const checkOut = async (req, res) => {
 
 export const markAttendance = async (req, res) => {
     try {
-        const { employee, date, checkIn, checkOut, status, leaveType, lop } = req.body;
+        const { employee, date, checkIn, checkOut, status, leaveType, lop, lopReason } = req.body;
 
         if (!employee) {
             return res.status(400).json({ message: 'Employee is required' });
@@ -171,8 +171,10 @@ export const markAttendance = async (req, res) => {
             overtime,
             overtimeMinutes,
             // LOP can be recorded on any day, leave included — an admin may need
-            // to dock a leave day as loss of pay.
+            // to dock a leave day as loss of pay. The reason is only meaningful
+            // when there actually is a deduction.
             lop: Number(lop) || 0,
+            lopReason: (Number(lop) || 0) > 0 ? String(lopReason || '') : '',
         });
 
         await syncSalary(employee, attendanceDate);
@@ -185,7 +187,7 @@ export const markAttendance = async (req, res) => {
 export const updateAttendance = async (req, res) => {
     try {
         const { id } = req.params;
-        const { date, checkIn, checkOut, status, leaveType, lop, lopPardoned, wfhPardoned } = req.body;
+        const { date, checkIn, checkOut, status, leaveType, lop, lopReason, lopPardoned, wfhPardoned } = req.body;
 
         const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh'];
         if (status && !validStatus.includes(status)) {
@@ -228,6 +230,15 @@ export const updateAttendance = async (req, res) => {
             attendance.overtime = overtime;
             attendance.overtimeMinutes = overtimeMinutes;
             if (lop !== undefined) attendance.lop = Number(lop) || 0;
+        }
+
+        // Keep the LOP reason in step with the amount: it is stored whenever there
+        // is a deduction, and cleared the moment the LOP is removed so a stale
+        // explanation can never linger on a day that no longer has one.
+        if (lop !== undefined || lopReason !== undefined) {
+            attendance.lopReason = (Number(attendance.lop) || 0) > 0
+                ? String(lopReason !== undefined ? (lopReason || '') : (attendance.lopReason || ''))
+                : '';
         }
 
         // Pardon flag for the attendance LOP (kept for reference, not deducted).

@@ -54,7 +54,7 @@ export const getDeductions = async (req, res) => {
             const base = { employee: a.employee, employeeName: e.name, empId: e.empId, date: a.date, month: monthOf(a.date), year: yearOf(a.date) };
             if (a.lop > 0) {
                 // Explicit LOP marked in the Attendance module (drives the LOP deduction).
-                entries.push({ ...base, _id: a._id, source: 'attendance', absence: false, days: a.lop, reason: 'Marked LOP in Attendance', pardoned: !!a.lopPardoned });
+                entries.push({ ...base, _id: a._id, source: 'attendance', absence: false, days: a.lop, reason: a.lopReason || 'Marked LOP in Attendance', pardoned: !!a.lopPardoned });
             } else if (a.status === 'leave') {
                 // Full leave with no type — unpaid, so it's a loss-of-pay day.
                 entries.push({ ...base, _id: a._id, source: 'attendance', absence: true, days: 1, reason: 'Full leave (unpaid)', pardoned: false });
