@@ -3,9 +3,10 @@
 // The attendance status and the salary late-deduction both read from here so
 // they can never drift apart.
 //
-// Rules, relative to the employee's start time plus a 5-minute grace:
-//   - check-in at or before 09:35        -> on time  (status 'present')
-//   - after 09:35, within 4 hours         -> 'late'   (deduction by how late)
+// Rules, relative to the employee's OWN start time plus a 5-minute grace (so a
+// 09:30 start is graced to 09:35, a 10:00 start to 10:05, and so on):
+//   - check-in at or before the grace time -> on time  (status 'present')
+//   - after the grace, within 4 hours      -> 'late'   (always deducted)
 //   - more than 4 hours later              -> 'half-day'
 //   - check-out after the end time         -> overtime
 // Company defaults (used when an employee has no custom hours): 09:30 - 18:00.
@@ -58,6 +59,62 @@ export const isLateCheckIn = (checkIn, startMinutes = DEFAULT_START_MINUTES) =>
 // the arrival is within the grace.
 export const minutesLate = (checkIn, startMinutes = DEFAULT_START_MINUTES) =>
     checkIn ? Math.max(0, minutesOfDay(checkIn) - lateFromMinutes(startMinutes)) : 0;
+
+// ---- late-arrival deduction --------------------------------------------------
+// The charge is assessed on the MONTH'S TOTAL late minutes, not day by day. Each
+// day contributes its own minutes past that employee's grace; those minutes are
+// summed for the month and the ladder is applied once.
+//
+// One full slab of 90 minutes costs one day's pay. What is left over after the
+// completed slabs is then charged on its own band:
+//
+//   total <= 40            -> nothing at all
+//   otherwise              -> floor(total / 90) days
+//                             + 0     if there is no remainder
+//                             + 0.25  if the remainder is 1 - 60
+//                             + 0.50  if the remainder is 61 - 89
+//
+// The 40-minute allowance is spent ONCE, against the month's total. It is not
+// granted again to the minutes left over after a slab: past the first 40, every
+// leftover minute is charged at 0.25 of a day or more.
+//
+// e.g. 140 minutes = one complete 90-minute slab (1 day) + 50 left over, which
+// falls in the 1-60 band, so 0.25 more — 1.25 days in total.
+//      100 minutes = one slab + 10 left over -> 1.25 days, not 1.
+//
+// The grace itself is relative to the employee's OWN start time, so a 09:30
+// start is late from 09:36 and a 10:00 start is late from 10:06.
+export const LATE_SLAB_MINUTES = 90;   // a completed slab = one day's pay
+export const LATE_FREE_MINUTES = 40;   // a month at or under this costs nothing
+
+// Fraction of one day's pay owed for a whole month's late minutes.
+export const lateDeductionForMinutes = (totalMinutes) => {
+    const total = Math.max(0, Math.round(Number(totalMinutes) || 0));
+    // The free allowance is tested here and ONLY here — against the month's
+    // total, never again against a remainder.
+    if (total <= LATE_FREE_MINUTES) return 0;
+
+    const slabs = Math.floor(total / LATE_SLAB_MINUTES);
+    const remainder = total % LATE_SLAB_MINUTES;
+
+    let extra = 0;
+    if (remainder > 60) extra = 0.5;
+    else if (remainder > 0) extra = 0.25;
+
+    return slabs + extra;
+};
+
+// The month's late minutes split into the parts the ladder charges on: the
+// completed 90-minute slabs, and the leftover minutes that did not fill one.
+// The leftover is what the Salary Adjustments page lets an admin edit down.
+export const splitLateMinutes = (totalMinutes) => {
+    const total = Math.max(0, Math.round(Number(totalMinutes) || 0));
+    return {
+        totalMinutes: total,
+        slabs: Math.floor(total / LATE_SLAB_MINUTES),
+        extraMinutes: total % LATE_SLAB_MINUTES,
+    };
+};
 
 // Attendance status derived purely from the check-in and the employee's start.
 export const deriveStatusFor = (checkIn, startMinutes = DEFAULT_START_MINUTES) => {

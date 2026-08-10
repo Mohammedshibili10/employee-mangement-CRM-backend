@@ -7,7 +7,8 @@ import {
     getAttendanceSummary,
     checkIn,
     checkOut,
-    pardonWfhForMonth
+    pardonWfhForMonth,
+    pardonLateDeduction
 } from '../controllers/attendanceController.js';
 
 const router = express.Router();
@@ -25,5 +26,6 @@ router.post('/checkout', authMiddleware.protect, checkOut);
 router.put('/:id', authMiddleware.protect, authMiddleware.adminOnly, updateAttendance);
 
 router.post('/pardon-wfh-month', authMiddleware.protect, authMiddleware.adminOnly, pardonWfhForMonth);
+router.put('/:id/pardon-late', authMiddleware.protect, authMiddleware.adminOnly, pardonLateDeduction);
 
 export default router;

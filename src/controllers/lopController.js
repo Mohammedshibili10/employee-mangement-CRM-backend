@@ -2,6 +2,7 @@ import LopRecord from "../models/LopRecord.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import { recalcSalaryForMonth } from "./salaryController.js";
+import { minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
 
 // Keep the salary report for a LOP record's month in sync (LOP deducts pay).
 const syncSalary = (employeeId, year, month) => recalcSalaryForMonth(employeeId, year, month);
@@ -21,7 +22,7 @@ export const getDeductions = async (req, res) => {
         const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
         const end = new Date(y, m, 0, 23, 59, 59, 999);
 
-        const employees = await Employee.find().select('name empId').lean();
+        const employees = await Employee.find().select('name empId workStartTime').lean();
         const empMap = {};
         employees.forEach((e) => { empMap[String(e._id)] = e; });
 
@@ -35,6 +36,8 @@ export const getDeductions = async (req, res) => {
                 { status: 'absent' },
                 { status: 'leave', leaveType: null },
                 { status: 'wfh' },
+                // Days worked with a check-in — assessed below for a late arrival.
+                { status: { $in: ['present', 'late'] }, checkIn: { $ne: null } },
             ],
         }).lean();
 
@@ -61,6 +64,23 @@ export const getDeductions = async (req, res) => {
             } else if (a.status === 'wfh') {
                 // WFH — 50% of per-day salary is deducted unless pardoned.
                 entries.push({ ...base, _id: a._id, source: 'attendance', absence: false, entryType: 'wfh', days: 0.5, reason: 'Work From Home (50% deduction)', pardoned: !!a.wfhPardoned });
+            } else if (a.status === 'present' || a.status === 'late') {
+                // A late arrival is listed for its MINUTES, not a money amount:
+                // the charge is worked out from the month's total, so no single
+                // day carries a price of its own. Pardoning a day here removes
+                // its minutes from that total.
+                const mins = minutesLate(a.checkIn, startMinutesOf(e));
+                if (mins > 0) {
+                    entries.push({
+                        ...base, _id: a._id, source: 'attendance', absence: false, entryType: 'late',
+                        days: 0,
+                        lateMinutes: mins,
+                        reason: `Late arrival — ${mins} min past grace`,
+                        pardoned: !!a.latePardoned,
+                        pardonedBy: a.latePardonedByName || '',
+                        pardonedAt: a.latePardonedAt || null,
+                    });
+                }
             } else {
                 // Unpaid absence — a loss-of-pay day (reflected in Actual Pay, not double-deducted).
                 entries.push({ ...base, _id: a._id, source: 'attendance', absence: true, days: 1, reason: 'Absent (unpaid)', pardoned: false });

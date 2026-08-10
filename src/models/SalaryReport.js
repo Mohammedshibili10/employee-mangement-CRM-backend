@@ -42,6 +42,14 @@ const salaryReportSchema = new mongoose.Schema({
     lopDays: { type: Number, default: 0 },
     lopDeduction: { type: Number, default: 0 },
 
+    // Late-arrival working, kept so a payslip can show how the charge was
+    // reached: the month's total minutes past each day's grace, how many
+    // complete 90-minute slabs that filled, and the leftover minutes charged on
+    // their own band (which an admin can adjust in Salary Adjustments).
+    lateMinutes: { type: Number, default: 0 },
+    lateSlabs: { type: Number, default: 0 },
+    lateExtraMinutes: { type: Number, default: 0 },
+
     // Deductions
     lateDeduction: { type: Number, default: 0 },
     salaryAdvance: { type: Number, default: 0 },

@@ -347,3 +347,43 @@ export const pardonWfhForMonth = async (req, res) => {
         res.status(500).json({ message: 'Server Error' });
     }
 };
+
+// Pardon (or un-pardon) the late-arrival deduction on one attendance day.
+// The record keeps its real check-in — only the deduction is waived — and who
+// approved it plus when are stored so the waiver is auditable.
+export const pardonLateDeduction = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const pardoned = req.body.pardoned === undefined ? true : Boolean(req.body.pardoned);
+
+        const attendance = await Attendance.findById(id);
+        if (!attendance) {
+            return res.status(404).json({ message: 'Attendance record not found' });
+        }
+
+        attendance.latePardoned = pardoned;
+        if (pardoned) {
+            const approver = await User.findById(req.user.id).select('name email').lean();
+            attendance.latePardonedBy = req.user.id;
+            attendance.latePardonedByName = approver?.name || approver?.email || 'Admin';
+            attendance.latePardonedAt = new Date();
+        } else {
+            // Reinstating the deduction clears the approval trail with it.
+            attendance.latePardonedBy = undefined;
+            attendance.latePardonedByName = '';
+            attendance.latePardonedAt = undefined;
+        }
+
+        await attendance.save();
+        await syncSalary(attendance.employee, attendance.date);
+
+        const populated = await Attendance.findById(attendance._id)
+            .populate({ path: 'employee', populate: { path: 'department' } });
+        return res.status(200).json({
+            message: pardoned ? 'Late deduction pardoned' : 'Late deduction reinstated',
+            attendance: populated,
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Something went wrong', error: error.message });
+    }
+};

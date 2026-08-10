@@ -50,6 +50,14 @@ const attendanceMongooseSchema = new mongoose.Schema({
     // Pardoned WFH: kept for reference but WFH deduction is waived
     wfhPardoned: { type: Boolean, default: false },
 
+    // Pardoned late arrival: the day stays on record with its real check-in, but
+    // the late-arrival deduction is waived. Who approved it and when are stored
+    // alongside so the waiver is auditable.
+    latePardoned: { type: Boolean, default: false },
+    latePardonedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    latePardonedByName: { type: String, default: '' },
+    latePardonedAt: { type: Date },
+
     // Where the record came from. Empty for anything entered through the app;
     // set to a batch name by a bulk import, so an import can be identified and
     // rolled back without touching the records the app created.

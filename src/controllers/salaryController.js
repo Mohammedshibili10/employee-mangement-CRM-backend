@@ -3,7 +3,8 @@ import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import LopRecord from "../models/LopRecord.js";
 import SalaryAdvance from "../models/SalaryAdvance.js";
-import { minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
+import LateAdjustment from "../models/LateAdjustment.js";
+import { lateDeductionForMinutes, splitLateMinutes, minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
 
 // Total LOP (Loss of Pay) days for an employee in a month, combining the two
 // sources that stay in sync: manual LOP entries (Deductions module) and days
@@ -87,20 +88,30 @@ const PAID_LEAVE_PER_MONTH = SICK_LEAVE_CAP + CASUAL_LEAVE_CAP;   // 1 CL + 1 SL
 const paidLeaveOf = (leaveDays, eligible = true) =>
     eligible ? Math.min(Math.max(0, leaveDays || 0), PAID_LEAVE_PER_MONTH) : 0;
 
-// Late-arrival deduction policy. Lateness starts after 09:35 (the 09:30 start
-// plus a 5-minute grace) and is counted in minutes from there:
-//   <= 40 min  -> warning only, no deduction (0)   i.e. up to 10:15
-//   41-60 min  -> 0.25 of a day's pay              i.e. up to 10:35
-//   61-90 min  -> 0.50 of a day's pay              i.e. up to 11:05
-//   > 90 min   -> 1.00 (a full day's pay)          i.e. after 11:05
-//
-// Assessed on EVERY day individually and summed for the month.
-function lateFractionFor(checkIn, startMinutes) {
-    const lateMin = minutesLate(checkIn, startMinutes);
-    if (lateMin > 90) return 1;
-    if (lateMin > 60) return 0.5;
-    if (lateMin > 40) return 0.25;
-    return 0;
+// Late-arrival deduction policy — see lateDeductionForMinutes in attendanceRules
+// for the ladder. Each day contributes its minutes past that employee's grace,
+// the MONTH'S TOTAL is what the ladder is applied to, and an admin can adjust the
+// leftover minutes that did not fill a complete 90-minute slab.
+async function readLateAdjustment(employeeId, year, month) {
+    const row = await LateAdjustment.findOne({ employee: employeeId, month, year }).lean();
+    return row ? Number(row.extraMinutes) || 0 : null;
+}
+
+// Turn a month's raw late minutes into the fraction of a day's pay owed, letting
+// an admin adjustment replace the leftover minutes.
+function lateFigures(totalMinutes, adjustedExtra) {
+    const raw = splitLateMinutes(totalMinutes);
+    // Only the leftover is adjustable; the completed slabs stand.
+    const extraMinutes = adjustedExtra == null ? raw.extraMinutes : Math.max(0, Math.round(adjustedExtra));
+    // Recompute from the adjusted total so an admin who raises the leftover past
+    // 90 simply fills another slab, exactly as real minutes would.
+    const effectiveMinutes = raw.slabs * 90 + extraMinutes;
+    return {
+        lateMinutes: raw.totalMinutes,
+        lateSlabs: raw.slabs,
+        lateExtraMinutes: extraMinutes,
+        lateFraction: lateDeductionForMinutes(effectiveMinutes),
+    };
 }
 
 // Read a month's attendance for one employee, walking the calendar day by day.
@@ -204,7 +215,7 @@ async function readAttendance(employee, year, month, startMinutes) {
     }
 
     let attendanceDays = 0, paidSundays = 0, employedDays = 0;
-    let leaveDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateFraction = 0, wfhDeductionDays = 0;
+    let leaveDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateMinutes = 0, wfhDeductionDays = 0;
 
     // Start at the joining day: nothing before it belongs to this employee.
     for (let d = firstEmployedDay; d <= lastEmployedDay; d++) {
@@ -230,7 +241,9 @@ async function readAttendance(employee, year, month, startMinutes) {
             // Judged on the ACTUAL check-in time, not the label on the day — a
             // day saved as "present" with a 10:45 arrival is still assessed, and
             // a day labelled "late" that arrived within the grace costs nothing.
-            lateFraction += lateFractionFor(r.checkIn, startMinutes);
+            // A pardoned late arrival keeps its record but contributes no minutes.
+            // The ladder is applied to the month's total, not to this one day.
+            if (!r.latePardoned) lateMinutes += minutesLate(r.checkIn, startMinutes);
         } else if (r.status === 'half-day') {
             attendanceDays += 0.5;      // the other half is lost
         } else if (r.status === 'wfh') {
@@ -250,7 +263,7 @@ async function readAttendance(employee, year, month, startMinutes) {
 
     return {
         attendanceDays, paidSundays, employedDays,
-        leaveDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays,
+        leaveDays, sickLeaveDays, casualLeaveDays, lateMinutes, wfhDeductionDays,
     };
 }
 
@@ -357,14 +370,23 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
 // Compute all attendance-derived + earnings fields for one employee by reading
 // their real attendance for the month.
 async function computeSalary(employee, year, month, workingDays) {
-    const { attendanceDays, paidSundays, employedDays, leaveDays, sickLeaveDays, casualLeaveDays, lateFraction, wfhDeductionDays } =
+    const { attendanceDays, paidSundays, employedDays, leaveDays, sickLeaveDays, casualLeaveDays, lateMinutes, wfhDeductionDays } =
         await readAttendance(employee, year, month, startMinutesOf(employee));
     const lopDays = await readLopDays(employee._id, year, month);
     const salaryAdvance = await readSalaryAdvance(employee._id, year, month);
 
+    // The month's late minutes, split into completed 90-minute slabs and the
+    // leftover an admin may have adjusted in Salary Adjustments.
+    const late = lateFigures(lateMinutes, await readLateAdjustment(employee._id, year, month));
+
     return {
         // Recovered from this month's pay — summed from the Salary Advance records.
         salaryAdvance,
+        // Late-arrival working: kept on the report so the UI can show how the
+        // deduction was arrived at without recomputing it.
+        lateMinutes: late.lateMinutes,
+        lateSlabs: late.lateSlabs,
+        lateExtraMinutes: late.lateExtraMinutes,
         ...deriveEarnings({
         monthlySalary: employee.salary || 0,
         workingDays,
@@ -375,7 +397,7 @@ async function computeSalary(employee, year, month, workingDays) {
         paidLeaveEligible: employee.employmentStatus !== 'probation',
         sickLeaveDays,
         casualLeaveDays,
-        lateFraction,
+        lateFraction: late.lateFraction,
         lopDays,
         wfhDeductionDays,
         employedDays,
