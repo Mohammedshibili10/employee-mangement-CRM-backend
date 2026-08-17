@@ -1,6 +1,7 @@
 import LopRecord from "../models/LopRecord.js";
 import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
+import Holiday from "../models/Holiday.js";
 import { recalcSalaryForMonth } from "./salaryController.js";
 import { minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
 
@@ -41,6 +42,11 @@ export const getDeductions = async (req, res) => {
             ],
         }).lean();
 
+        // Company holidays are paid for everyone, so nothing dated on one is a
+        // deduction — not even a day someone happened to mark absent.
+        const holidays = await Holiday.find({ date: { $gte: start, $lte: end } }).select('date').lean();
+        const holidayDays = new Set(holidays.map((h) => new Date(h.date).getDate()));
+
         const entries = [];
         manual.forEach((r) => {
             const e = empMap[String(r.employee)];
@@ -54,6 +60,8 @@ export const getDeductions = async (req, res) => {
         attendance.forEach((a) => {
             const e = empMap[String(a.employee)];
             if (!e) return;
+            // Nothing on a company holiday is charged.
+            if (holidayDays.has(new Date(a.date).getDate())) return;
             const base = { employee: a.employee, employeeName: e.name, empId: e.empId, date: a.date, month: monthOf(a.date), year: yearOf(a.date) };
             if (a.lop > 0) {
                 // Explicit LOP marked in the Attendance module (drives the LOP deduction).

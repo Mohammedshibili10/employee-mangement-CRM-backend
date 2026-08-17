@@ -4,6 +4,7 @@ import Attendance from "../models/Attendance.js";
 import LopRecord from "../models/LopRecord.js";
 import SalaryAdvance from "../models/SalaryAdvance.js";
 import LateAdjustment from "../models/LateAdjustment.js";
+import Holiday from "../models/Holiday.js";
 import { lateDeductionForMinutes, splitLateMinutes, minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
 
 // Total LOP (Loss of Pay) days for an employee in a month, combining the two
@@ -49,6 +50,18 @@ async function readSalaryAdvance(employeeId, year, month) {
 // different weekly off or starts excluding a second day.
 const WEEKLY_OFF_WEEKDAYS = [0]; // 0 = Sunday, 6 = Saturday
 const isWeeklyOff = (date) => WEEKLY_OFF_WEEKDAYS.includes(new Date(date).getDay());
+
+// The company holidays falling in a month, as a map of day-of-month -> holiday.
+// Read straight from Holiday Management so a holiday applies to every employee
+// at once, including anyone who joins after it was configured.
+async function readHolidays(year, month) {
+    const rows = await Holiday.find({
+        date: { $gte: new Date(year, month - 1, 1), $lte: new Date(year, month, 0, 23, 59, 59, 999) },
+    }).lean();
+    const byDay = new Map();
+    rows.forEach((h) => byDay.set(new Date(h.date).getDate(), h));
+    return byDay;
+}
 
 // MONTH DAYS — the selected month's actual calendar length.
 // June -> 30, July -> 31, February -> 28 or 29 depending on the year.
@@ -214,7 +227,10 @@ async function readAttendance(employee, year, month, startMinutes) {
         lastEmployedDay = Math.min(lastEmployedDay, upTo);
     }
 
-    let attendanceDays = 0, paidSundays = 0, employedDays = 0;
+    // Company holidays for this month, applied to every employee alike.
+    const holidays = await readHolidays(year, month);
+
+    let attendanceDays = 0, paidSundays = 0, paidHolidays = 0, employedDays = 0;
     let leaveDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateMinutes = 0, wfhDeductionDays = 0;
 
     // Start at the joining day: nothing before it belongs to this employee.
@@ -229,10 +245,29 @@ async function readAttendance(employee, year, month, startMinutes) {
             continue;
         }
 
+        const r = byDay.get(d);
+
+        // A COMPANY HOLIDAY is paid exactly like a Sunday — nobody was due to
+        // work, so it is never attendance and never a loss of pay. It applies
+        // whether it comes from Holiday Management or was marked on the day
+        // itself, and it is settled before any record is read so an employee who
+        // did come in cannot be paid twice for it.
+        const holiday = holidays.get(d);
+        if ((holiday && holiday.paid !== false) || r?.status === 'holiday') {
+            paidHolidays += 1;
+            continue;
+        }
+        // An UNPAID holiday (a shutdown) is a non-working day: it earns nothing,
+        // but it is not a loss of pay either — nobody was due in. Taking it back
+        // out of the employed days prorates the month instead of charging it.
+        if (holiday) {
+            employedDays -= 1;
+            continue;
+        }
+
         // A working day with NO attendance record earns nothing — it becomes a
         // loss-of-pay day. It is never written off just because it is late in
         // the month; if the record is not there, the day was not worked.
-        const r = byDay.get(d);
         if (!r) continue;
 
         // ---- attendance days: only the records actually marked on working days.
@@ -262,7 +297,7 @@ async function readAttendance(employee, year, month, startMinutes) {
     }
 
     return {
-        attendanceDays, paidSundays, employedDays,
+        attendanceDays, paidSundays, paidHolidays, employedDays,
         leaveDays, sickLeaveDays, casualLeaveDays, lateMinutes, wfhDeductionDays,
     };
 }
@@ -282,7 +317,7 @@ async function readAttendance(employee, year, month, startMinutes) {
 //
 // Sundays are paid even though no attendance is marked on them; a working day
 // with no attendance is simply not paid.
-export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, paidSundays = 0, employedDays = null, leaveDays = 0, paidLeaveEligible = true, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
+export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, paidSundays = 0, paidHolidays = 0, employedDays = null, leaveDays = 0, paidLeaveEligible = true, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
     // A day's pay = salary / working days, and working days is every day of the
     // month (Sundays included).
     const perDay = workingDays > 0 ? monthlySalary / workingDays : 0;
@@ -295,9 +330,9 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
     // month, unless they joined part-way through — then only from the joining day.
     const daysOnPayroll = employedDays != null ? employedDays : workingDays;
 
-    // Total Paid Days = Attendance Days + Paid Sundays + approved paid leave,
-    // and never more than the days they were employed for.
-    const paidDays = Math.min(daysOnPayroll, Math.max(0, attendanceDays + paidSundays + paidLeaveDays));
+    // Total Paid Days = Attendance Days + Paid Sundays + Paid Holidays +
+    // approved paid leave, and never more than the days they were employed for.
+    const paidDays = Math.min(daysOnPayroll, Math.max(0, attendanceDays + paidSundays + paidHolidays + paidLeaveDays));
 
     // LOSS OF PAY = Working Days − Present Days − Paid Leaves − Paid Sundays
     //
@@ -343,6 +378,8 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
         attendanceDays,
         // Sundays / weekly offs in the month — paid without attendance.
         paidSundays,
+        // Company holidays in the month — likewise paid without attendance.
+        paidHolidays,
         // Attendance + paid Sundays + approved leave: what the salary is paid on.
         paidDays: round2(paidDays),
         // Total leave days taken this month (all types).
@@ -370,7 +407,7 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
 // Compute all attendance-derived + earnings fields for one employee by reading
 // their real attendance for the month.
 async function computeSalary(employee, year, month, workingDays) {
-    const { attendanceDays, paidSundays, employedDays, leaveDays, sickLeaveDays, casualLeaveDays, lateMinutes, wfhDeductionDays } =
+    const { attendanceDays, paidSundays, paidHolidays, employedDays, leaveDays, sickLeaveDays, casualLeaveDays, lateMinutes, wfhDeductionDays } =
         await readAttendance(employee, year, month, startMinutesOf(employee));
     const lopDays = await readLopDays(employee._id, year, month);
     const salaryAdvance = await readSalaryAdvance(employee._id, year, month);
@@ -392,6 +429,7 @@ async function computeSalary(employee, year, month, workingDays) {
         workingDays,
         attendanceDays,
         paidSundays,
+        paidHolidays,
         leaveDays,
         // Probation employees get no monthly paid-leave allowance.
         paidLeaveEligible: employee.employmentStatus !== 'probation',

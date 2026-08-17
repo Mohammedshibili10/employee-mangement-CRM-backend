@@ -10,7 +10,7 @@ export const attendanceSchema = z.object({
     checkIn: z.coerce.date().optional(),
     checkOut: z.coerce.date().optional(),
 
-    status: z.enum(['present', 'absent', 'late', 'half-day', 'leave', 'wfh']),
+    status: z.enum(['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday']),
     leaveType: z.enum(['sick', 'casual']).optional(),
 
     latitude: z.number().optional(),
@@ -25,7 +25,10 @@ const attendanceMongooseSchema = new mongoose.Schema({
     date: { type: Date, required: true },
     checkIn: { type: Date },
     checkOut: { type: Date },
-    status: { type: String, enum: ['present', 'absent', 'late', 'half-day', 'leave', 'wfh'], required: true },
+    // 'holiday' — a company holiday. Paid like a Sunday: never attendance,
+    // never a loss of pay. Dates configured in Holiday Management apply to
+    // everyone automatically; this status is for marking one-off cases.
+    status: { type: String, enum: ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday'], required: true },
     leaveType: { type: String, enum: ['sick', 'casual'] },
 
     latitude: { type: Number },
@@ -57,6 +60,11 @@ const attendanceMongooseSchema = new mongoose.Schema({
     latePardonedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     latePardonedByName: { type: String, default: '' },
     latePardonedAt: { type: Date },
+
+    // Set when Holiday Management turned an existing record into a holiday. It
+    // holds the status the day had before, so removing the holiday puts the
+    // record back exactly as it was rather than guessing.
+    holidayPrevStatus: { type: String },
 
     // Where the record came from. Empty for anything entered through the app;
     // set to a batch name by a bulk import, so an import can be identified and

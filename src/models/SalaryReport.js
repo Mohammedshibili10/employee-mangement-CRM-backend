@@ -19,6 +19,9 @@ const salaryReportSchema = new mongoose.Schema({
     attendanceDays: { type: Number, default: 0 },
     // Sundays / weekly offs in the month — paid without attendance being marked.
     paidSundays: { type: Number, default: 0 },
+    // Company holidays in the month — likewise paid without attendance, and
+    // never counted as an absence or a loss of pay.
+    paidHolidays: { type: Number, default: 0 },
     // Attendance + paid Sundays + approved leave: what the salary is paid on.
     paidDays: { type: Number, default: 0 },
     // Total leave days taken in the month (all types). Of these only the first
