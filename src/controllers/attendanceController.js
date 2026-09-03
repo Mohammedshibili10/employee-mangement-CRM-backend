@@ -7,8 +7,15 @@ import { deriveStatusFor, overtimeFor, startMinutesOf, endMinutesOf } from "../u
 // Keep any existing salary report for this employee's month in sync after
 // attendance/leave changes (no manual "recalculate" needed).
 const syncSalary = (employeeId, date) => {
+    if (!employeeId || !date) return Promise.resolve();
     const d = new Date(date);
-    return recalcSalaryForMonth(employeeId, d.getFullYear(), d.getMonth() + 1);
+    const year = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(date)
+        ? Number(date.slice(0, 4))
+        : d.getFullYear();
+    const month = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(date)
+        ? Number(date.slice(5, 7))
+        : d.getMonth() + 1;
+    return recalcSalaryForMonth(employeeId, year, month);
 };
 
 const getDayRange = (date) => {
@@ -130,7 +137,7 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Employee is required' });
         }
 
-        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday'];
+        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday', 'none'];
         if (status && !validStatus.includes(status)) {
             return res.status(400).json({ message: 'Invalid status value' });
         }
@@ -155,19 +162,18 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Attendance already marked for this day' });
         }
 
-        // A leave record (Sick/Casual, or a typeless "None" full leave) has no
-        // check-in/out; a worked day derives its status from the check-in.
-        const isLeave = !!leaveType || status === 'leave';
-        const finalStatus = isLeave ? 'leave' : (status || deriveStatus(checkIn, employeeDoc));
-        const { overtime, overtimeMinutes } = isLeave ? { overtime: false, overtimeMinutes: 0 } : computeOvertime(checkOut, employeeDoc);
+        const isNone = status === 'none';
+        const isLeave = !isNone && (!!leaveType || status === 'leave');
+        const finalStatus = isNone ? 'none' : (isLeave ? 'leave' : (status || deriveStatus(checkIn, employeeDoc)));
+        const { overtime, overtimeMinutes } = (isLeave || isNone) ? { overtime: false, overtimeMinutes: 0 } : computeOvertime(checkOut, employeeDoc);
 
         const attendance = await Attendance.create({
             employee,
             date: attendanceDate,
-            checkIn: isLeave ? undefined : (checkIn || undefined),
-            checkOut: isLeave ? undefined : (checkOut || undefined),
+            checkIn: (isLeave || isNone) ? undefined : (checkIn || undefined),
+            checkOut: (isLeave || isNone) ? undefined : (checkOut || undefined),
             status: finalStatus,
-            leaveType: leaveType || undefined,
+            leaveType: isNone ? undefined : (leaveType || undefined),
             overtime,
             overtimeMinutes,
             // LOP can be recorded on any day, leave included — an admin may need
@@ -189,7 +195,7 @@ export const updateAttendance = async (req, res) => {
         const { id } = req.params;
         const { date, checkIn, checkOut, status, leaveType, lop, lopReason, lopPardoned, wfhPardoned } = req.body;
 
-        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday'];
+        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday', 'none'];
         if (status && !validStatus.includes(status)) {
             return res.status(400).json({ message: 'Invalid status value' });
         }
@@ -207,10 +213,18 @@ export const updateAttendance = async (req, res) => {
 
         if (date) attendance.date = new Date(date);
 
-        // A full leave when the status is 'leave' OR a leave type is given.
-        // "None" full leave (status 'leave', no type) is unpaid → counts as LOP.
-        const wantsLeave = status === 'leave' || !!leaveType;
-        if (wantsLeave) {
+        const wantsNone = status === 'none';
+        const wantsLeave = !wantsNone && (status === 'leave' || !!leaveType);
+
+        if (wantsNone) {
+            attendance.status = 'none';
+            attendance.leaveType = undefined;
+            attendance.checkIn = checkIn ? new Date(checkIn) : null;
+            attendance.checkOut = checkOut ? new Date(checkOut) : null;
+            attendance.overtime = false;
+            attendance.overtimeMinutes = 0;
+            if (lop !== undefined) attendance.lop = Number(lop) || 0;
+        } else if (wantsLeave) {
             attendance.status = 'leave';
             attendance.leaveType = leaveType || undefined;   // "" / missing = None (unpaid)
             attendance.checkIn = null;
@@ -312,6 +326,7 @@ export const getAttendanceSummary = async (req, res) => {
             leave: 0,
             wfh: 0,
             holiday: 0,
+            none: 0,
         };
 
         records.forEach((record) => {

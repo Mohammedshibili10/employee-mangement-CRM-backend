@@ -251,7 +251,7 @@ async function readAttendance(employee, year, month, startMinutes) {
     }
 
     // Company holidays for this month, filtered to target applicability for this employee.
-    const holidays = await readHolidays(year, month, empDoc);
+    const holidays = await readHolidays(year, month, employee);
 
     let attendanceDays = 0, paidSundays = 0, paidHolidays = 0, employedDays = 0;
     let leaveDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateMinutes = 0, wfhDeductionDays = 0;
@@ -288,10 +288,10 @@ async function readAttendance(employee, year, month, startMinutes) {
             continue;
         }
 
-        // A working day with NO attendance record earns nothing — it becomes a
+        // A working day with NO attendance record (or marked as 'none') earns nothing — it becomes a
         // loss-of-pay day. It is never written off just because it is late in
         // the month; if the record is not there, the day was not worked.
-        if (!r) continue;
+        if (!r || r.status === 'none') continue;
 
         // ---- attendance days: only the records actually marked on working days.
         if (r.status === 'present' || r.status === 'late') {
@@ -519,6 +519,10 @@ export const generateSalary = async (req, res) => {
         for (const emp of employees) {
             const existing = await SalaryReport.findOne({ employee: emp._id, month, year });
             if (existing) {
+                const calc = await computeSalary(emp, year, month, workingDays);
+                Object.assign(existing, calc);
+                existing.netPay = computeNetPay(existing);
+                await existing.save();
                 skipped.push({ empId: emp.empId, name: emp.name });
                 continue;
             }

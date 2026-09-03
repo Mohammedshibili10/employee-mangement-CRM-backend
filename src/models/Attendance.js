@@ -10,7 +10,7 @@ export const attendanceSchema = z.object({
     checkIn: z.coerce.date().optional(),
     checkOut: z.coerce.date().optional(),
 
-    status: z.enum(['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday']),
+    status: z.enum(['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday', 'none']),
     leaveType: z.enum(['sick', 'casual']).optional(),
 
     latitude: z.number().optional(),
@@ -28,7 +28,7 @@ const attendanceMongooseSchema = new mongoose.Schema({
     // 'holiday' — a company holiday. Paid like a Sunday: never attendance,
     // never a loss of pay. Dates configured in Holiday Management apply to
     // everyone automatically; this status is for marking one-off cases.
-    status: { type: String, enum: ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday'], required: true },
+    status: { type: String, enum: ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday', 'none'], required: true },
     leaveType: { type: String, enum: ['sick', 'casual'] },
 
     latitude: { type: Number },
