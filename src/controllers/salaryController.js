@@ -52,14 +52,37 @@ const WEEKLY_OFF_WEEKDAYS = [0]; // 0 = Sunday, 6 = Saturday
 const isWeeklyOff = (date) => WEEKLY_OFF_WEEKDAYS.includes(new Date(date).getDay());
 
 // The company holidays falling in a month, as a map of day-of-month -> holiday.
-// Read straight from Holiday Management so a holiday applies to every employee
-// at once, including anyone who joins after it was configured.
-async function readHolidays(year, month) {
+// Filtered to only those holidays applicable to the specified employee (all, specific department, or specific employee).
+async function readHolidays(year, month, employee = null) {
     const rows = await Holiday.find({
         date: { $gte: new Date(year, month - 1, 1), $lte: new Date(year, month, 0, 23, 59, 59, 999) },
     }).lean();
     const byDay = new Map();
-    rows.forEach((h) => byDay.set(new Date(h.date).getDate(), h));
+    rows.forEach((h) => {
+        if (!employee) {
+            byDay.set(new Date(h.date).getDate(), h);
+            return;
+        }
+        let isApplicable = false;
+        const app = h.applicableTo || 'all';
+        if (app === 'all') {
+            isApplicable = true;
+        } else if (app === 'department' && h.department) {
+            const empDept = String(employee.department?._id || employee.department || '');
+            const holDept = String(h.department?._id || h.department || '');
+            if (empDept && holDept && empDept === holDept) {
+                isApplicable = true;
+            }
+        } else if (app === 'employee' && Array.isArray(h.employees)) {
+            const empIdStr = String(employee._id || employee);
+            if (h.employees.some((e) => String(e._id || e) === empIdStr)) {
+                isApplicable = true;
+            }
+        }
+        if (isApplicable) {
+            byDay.set(new Date(h.date).getDate(), h);
+        }
+    });
     return byDay;
 }
 
@@ -227,8 +250,8 @@ async function readAttendance(employee, year, month, startMinutes) {
         lastEmployedDay = Math.min(lastEmployedDay, upTo);
     }
 
-    // Company holidays for this month, applied to every employee alike.
-    const holidays = await readHolidays(year, month);
+    // Company holidays for this month, filtered to target applicability for this employee.
+    const holidays = await readHolidays(year, month, empDoc);
 
     let attendanceDays = 0, paidSundays = 0, paidHolidays = 0, employedDays = 0;
     let leaveDays = 0, sickLeaveDays = 0, casualLeaveDays = 0, lateMinutes = 0, wfhDeductionDays = 0;

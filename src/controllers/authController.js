@@ -11,12 +11,31 @@ export const login = async (req, res) => {
             return res.status(400).json({ message: 'Email and password are required' });
         }
 
-        const user = await User.findOne({ email });
+        const rawIdentifier = email.trim();
+        const cleanPassword = password.trim();
+
+        // 1. Case-insensitive search by email
+        let user = await User.findOne({
+            email: { $regex: new RegExp(`^${rawIdentifier.replace(/[-[\]{}()*+? আনে^$|#\s]/g, '\\$&')}$`, 'i') }
+        });
+
+        // 2. If not found by email, check if rawIdentifier is an Employee ID (empId)
+        if (!user) {
+            const emp = await Employee.findOne({
+                empId: { $regex: new RegExp(`^${rawIdentifier.replace(/[-[\]{}()*+? আনে^$|#\s]/g, '\\$&')}$`, 'i') }
+            });
+            if (emp?.email) {
+                user = await User.findOne({
+                    email: { $regex: new RegExp(`^${emp.email.replace(/[-[\]{}()*+? আনে^$|#\s]/g, '\\$&')}$`, 'i') }
+                });
+            }
+        }
+
         if (!user) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
-        const passwordMatches = await bcrypt.compare(password, user.password);
+        const passwordMatches = await bcrypt.compare(cleanPassword, user.password);
         if (!passwordMatches) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }

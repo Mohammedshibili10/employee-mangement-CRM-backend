@@ -23,7 +23,7 @@ export const getDeductions = async (req, res) => {
         const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
         const end = new Date(y, m, 0, 23, 59, 59, 999);
 
-        const employees = await Employee.find().select('name empId workStartTime').lean();
+        const employees = await Employee.find().select('name empId workStartTime department').lean();
         const empMap = {};
         employees.forEach((e) => { empMap[String(e._id)] = e; });
 
@@ -42,10 +42,24 @@ export const getDeductions = async (req, res) => {
             ],
         }).lean();
 
-        // Company holidays are paid for everyone, so nothing dated on one is a
-        // deduction — not even a day someone happened to mark absent.
-        const holidays = await Holiday.find({ date: { $gte: start, $lte: end } }).select('date').lean();
-        const holidayDays = new Set(holidays.map((h) => new Date(h.date).getDate()));
+        // Company holidays are paid for targeted employees, so nothing dated on one is a
+        // deduction for applicable employees.
+        const holidays = await Holiday.find({ date: { $gte: start, $lte: end } }).select('date applicableTo department employees').lean();
+        const isHolidayForEmp = (aDate, emp) => {
+            const aTime = new Date(aDate).toDateString();
+            return holidays.some((h) => {
+                if (new Date(h.date).toDateString() !== aTime) return false;
+                const app = h.applicableTo || 'all';
+                if (app === 'all') return true;
+                if (app === 'department' && h.department) {
+                    return String(h.department) === String(emp.department?._id || emp.department);
+                }
+                if (app === 'employee' && Array.isArray(h.employees)) {
+                    return h.employees.some((id) => String(id) === String(emp._id));
+                }
+                return false;
+            });
+        };
 
         const entries = [];
         manual.forEach((r) => {
@@ -60,8 +74,8 @@ export const getDeductions = async (req, res) => {
         attendance.forEach((a) => {
             const e = empMap[String(a.employee)];
             if (!e) return;
-            // Nothing on a company holiday is charged.
-            if (holidayDays.has(new Date(a.date).getDate())) return;
+            // Nothing on a company holiday for targeted employees is charged.
+            if (isHolidayForEmp(a.date, e)) return;
             const base = { employee: a.employee, employeeName: e.name, empId: e.empId, date: a.date, month: monthOf(a.date), year: yearOf(a.date) };
             if (a.lop > 0) {
                 // Explicit LOP marked in the Attendance module (drives the LOP deduction).

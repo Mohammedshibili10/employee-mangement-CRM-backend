@@ -49,4 +49,5 @@ app.use('/api/holidays', holidayRoutes);
 app.listen(PORT,()=>{
     connectDB();
     console.log(`Server is running on port ${PORT}`);
-})
+});
+

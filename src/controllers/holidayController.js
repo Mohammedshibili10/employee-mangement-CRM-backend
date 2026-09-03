@@ -21,24 +21,30 @@ const sourceTag = (holidayId) => `holiday:${holidayId}`;
 // work (present / late / half-day / wfh) are never touched.
 const REPLACEABLE = ['absent', 'leave'];
 
-// Write the holiday across the workforce so it SHOWS in Attendance.
+// Write the holiday across the targeted workforce so it SHOWS in Attendance.
 //
-// Payroll does not depend on these records — it reads the Holiday collection
-// directly — so a missing one can never cost anyone money. They exist purely so
-// the day reads as "Holiday" in the attendance list, the monthly grid and the
-// exports.
+// Payroll reads the Holiday collection and respects the target criteria (all,
+// department, or specific employee).
 async function applyHolidayToAttendance(holiday) {
     const day = atMidnight(holiday.date);
     const dayEnd = new Date(day);
     dayEnd.setHours(23, 59, 59, 999);
 
-    // Only people actually on the payroll that day.
-    const employees = await Employee.find({
+    const empQuery = {
         $and: [
             { $or: [{ joiningDate: { $lte: dayEnd } }, { joiningDate: null }] },
             { $or: [{ lastWorkingDate: { $gte: day } }, { lastWorkingDate: null }, { lastWorkingDate: { $exists: false } }] },
         ],
-    }).select('_id').lean();
+    };
+
+    if (holiday.applicableTo === 'department' && holiday.department) {
+        empQuery.department = holiday.department;
+    } else if (holiday.applicableTo === 'employee' && Array.isArray(holiday.employees) && holiday.employees.length > 0) {
+        empQuery._id = { $in: holiday.employees };
+    }
+
+    // Only people actually on the payroll that day matching target scope.
+    const employees = await Employee.find(empQuery).select('_id department').lean();
 
     const existing = await Attendance.find({ date: { $gte: day, $lte: dayEnd } });
     const byEmployee = new Map(existing.map((r) => [String(r.employee), r]));
@@ -96,6 +102,55 @@ async function removeHolidayFromAttendance(holiday) {
     }
 }
 
+// Check if two holidays clash on target scope
+async function checkHolidayClash(date, targetScope, excludeId = null) {
+    const day = atMidnight(date);
+    const filter = { date: day };
+    if (excludeId) filter._id = { $ne: excludeId };
+
+    const existingHolidays = await Holiday.find(filter).lean();
+    if (!existingHolidays.length) return null;
+
+    const { applicableTo = 'all', department = null, employees = [] } = targetScope;
+
+    for (const existing of existingHolidays) {
+        const exApp = existing.applicableTo || 'all';
+
+        // 'all' clashes with everything on that date
+        if (applicableTo === 'all' || exApp === 'all') {
+            return existing;
+        }
+
+        if (applicableTo === 'department' && exApp === 'department') {
+            if (String(department) === String(existing.department)) return existing;
+        }
+
+        if (applicableTo === 'employee' && exApp === 'employee') {
+            const exEmpSet = new Set((existing.employees || []).map((e) => String(e)));
+            const hasOverlap = (employees || []).some((e) => exEmpSet.has(String(e)));
+            if (hasOverlap) return existing;
+        }
+
+        if (applicableTo === 'department' && exApp === 'employee') {
+            // Check if any of the specific employees in existing belong to this department
+            if (existing.employees?.length) {
+                const count = await Employee.countDocuments({ _id: { $in: existing.employees }, department });
+                if (count > 0) return existing;
+            }
+        }
+
+        if (applicableTo === 'employee' && exApp === 'department') {
+            // Check if any of target employees belong to existing department
+            if (employees?.length) {
+                const count = await Employee.countDocuments({ _id: { $in: employees }, department: existing.department });
+                if (count > 0) return existing;
+            }
+        }
+    }
+
+    return null;
+}
+
 // Adding, moving or removing a holiday changes who was due to work that month,
 // so every employee's payroll for it has to follow.
 async function syncMonth(date) {
@@ -123,7 +178,11 @@ export const getHolidays = async (req, res) => {
                 filter.date = { $gte: new Date(y, 0, 1), $lte: new Date(y, 11, 31, 23, 59, 59, 999) };
             }
         }
-        const holidays = await Holiday.find(filter).sort({ date: 1 }).lean();
+        const holidays = await Holiday.find(filter)
+            .populate('department', 'name head')
+            .populate('employees', 'name empId department')
+            .sort({ date: 1 })
+            .lean();
         return res.status(200).json({ holidays, message: 'Holidays retrieved' });
     } catch (error) {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
@@ -132,15 +191,28 @@ export const getHolidays = async (req, res) => {
 
 export const createHoliday = async (req, res) => {
     try {
-        const { name, date, description, paid } = req.body;
+        const { name, date, description, paid, applicableTo = 'all', department, employees } = req.body;
         if (!name || !date) {
             return res.status(400).json({ message: 'Holiday name and date are required' });
         }
-        const day = atMidnight(date);
 
-        const clash = await Holiday.findOne({ date: day });
+        if (applicableTo === 'department' && !department) {
+            return res.status(400).json({ message: 'Please select a department for this holiday' });
+        }
+        if (applicableTo === 'employee' && (!employees || !employees.length)) {
+            return res.status(400).json({ message: 'Please select at least one employee for this holiday' });
+        }
+
+        const day = atMidnight(date);
+        const targetScope = {
+            applicableTo,
+            department: applicableTo === 'department' ? department : null,
+            employees: applicableTo === 'employee' ? (Array.isArray(employees) ? employees : [employees]) : [],
+        };
+
+        const clash = await checkHolidayClash(day, targetScope);
         if (clash) {
-            return res.status(400).json({ message: `${clash.name} is already recorded on that date.` });
+            return res.status(400).json({ message: `${clash.name} is already recorded on that date for matching employees.` });
         }
 
         const creator = await User.findById(req.user.id).select('name email').lean();
@@ -150,13 +222,21 @@ export const createHoliday = async (req, res) => {
             description: description || '',
             paid: paid === undefined ? true : Boolean(paid),
             createdByName: creator?.name || creator?.email || 'Admin',
+            applicableTo: targetScope.applicableTo,
+            department: targetScope.department,
+            employees: targetScope.employees,
         });
+
+        const populatedHoliday = await Holiday.findById(holiday._id)
+            .populate('department', 'name head')
+            .populate('employees', 'name empId department')
+            .lean();
 
         const applied = await applyHolidayToAttendance(holiday);
         await syncMonth(day);
         return res.status(201).json({
             message: `Holiday added — marked for ${applied.created + applied.converted} employee(s) in Attendance.`,
-            holiday,
+            holiday: populatedHoliday,
             applied,
         });
     } catch (error) {
@@ -167,12 +247,11 @@ export const createHoliday = async (req, res) => {
 export const updateHoliday = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, date, description, paid } = req.body;
+        const { name, date, description, paid, applicableTo, department, employees } = req.body;
 
         const holiday = await Holiday.findById(id);
         if (!holiday) return res.status(404).json({ message: 'Holiday not found' });
 
-        // A holiday can be moved to another month, so both months re-sync.
         const previousDate = holiday.date;
 
         if (name) holiday.name = name;
@@ -180,20 +259,48 @@ export const updateHoliday = async (req, res) => {
         if (description !== undefined) holiday.description = description;
         if (paid !== undefined) holiday.paid = Boolean(paid);
 
-        const clash = await Holiday.findOne({ date: holiday.date, _id: { $ne: holiday._id } });
-        if (clash) {
-            return res.status(400).json({ message: `${clash.name} is already recorded on that date.` });
+        if (applicableTo !== undefined) {
+            holiday.applicableTo = applicableTo;
+            if (applicableTo === 'department') {
+                if (!department) return res.status(400).json({ message: 'Please select a department for this holiday' });
+                holiday.department = department;
+                holiday.employees = [];
+            } else if (applicableTo === 'employee') {
+                if (!employees || !employees.length) return res.status(400).json({ message: 'Please select at least one employee for this holiday' });
+                holiday.employees = Array.isArray(employees) ? employees : [employees];
+                holiday.department = null;
+            } else {
+                holiday.applicableTo = 'all';
+                holiday.department = null;
+                holiday.employees = [];
+            }
         }
 
-        // Take the old day's markings off before writing the new day's.
+        const targetScope = {
+            applicableTo: holiday.applicableTo,
+            department: holiday.department,
+            employees: holiday.employees,
+        };
+
+        const clash = await checkHolidayClash(holiday.date, targetScope, holiday._id);
+        if (clash) {
+            return res.status(400).json({ message: `${clash.name} is already recorded on that date for matching employees.` });
+        }
+
         await removeHolidayFromAttendance({ _id: holiday._id, date: previousDate });
         await holiday.save();
+
+        const populatedHoliday = await Holiday.findById(holiday._id)
+            .populate('department', 'name head')
+            .populate('employees', 'name empId department')
+            .lean();
+
         const applied = await applyHolidayToAttendance(holiday);
 
         await syncMonth(previousDate);
         if (atMidnight(previousDate).getTime() !== holiday.date.getTime()) await syncMonth(holiday.date);
 
-        return res.status(200).json({ message: 'Holiday updated', holiday, applied });
+        return res.status(200).json({ message: 'Holiday updated', holiday: populatedHoliday, applied });
     } catch (error) {
         return res.status(500).json({ message: 'Something went wrong', error: error.message });
     }

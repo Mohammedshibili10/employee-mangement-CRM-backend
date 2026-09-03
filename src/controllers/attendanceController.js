@@ -130,7 +130,7 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Employee is required' });
         }
 
-        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh'];
+        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday'];
         if (status && !validStatus.includes(status)) {
             return res.status(400).json({ message: 'Invalid status value' });
         }
@@ -189,7 +189,7 @@ export const updateAttendance = async (req, res) => {
         const { id } = req.params;
         const { date, checkIn, checkOut, status, leaveType, lop, lopReason, lopPardoned, wfhPardoned } = req.body;
 
-        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh'];
+        const validStatus = ['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday'];
         if (status && !validStatus.includes(status)) {
             return res.status(400).json({ message: 'Invalid status value' });
         }
@@ -302,16 +302,20 @@ export const getAttendanceSummary = async (req, res) => {
 
         const records = await Attendance.find(filter);
 
+        // Every status is seeded at zero. Without the seed an unseeded status
+        // (wfh, holiday) counts as undefined + 1 = NaN.
         const summary = {
             present: 0,
             absent: 0,
             late: 0,
             'half-day': 0,
             leave: 0,
+            wfh: 0,
+            holiday: 0,
         };
 
         records.forEach((record) => {
-            summary[record.status] = summary[record.status] + 1;
+            summary[record.status] = (summary[record.status] || 0) + 1;
         });
 
         return res.status(200).json({

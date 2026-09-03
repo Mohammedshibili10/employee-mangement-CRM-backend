@@ -26,9 +26,13 @@ const holidayMongooseSchema = new mongoose.Schema({
     paid: { type: Boolean, default: true },
 
     createdByName: { type: String, default: '' },
+
+    // Applicability scope: 'all', 'department', or 'employee'
+    applicableTo: { type: String, enum: ['all', 'department', 'employee'], default: 'all' },
+    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null },
+    employees: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }],
 }, { timestamps: true });
 
-// One holiday per date.
-holidayMongooseSchema.index({ date: 1 }, { unique: true });
+holidayMongooseSchema.index({ date: 1 });
 
 export default mongoose.model('Holiday', holidayMongooseSchema);
