@@ -277,7 +277,7 @@ export const updateAttendance = async (req, res) => {
 
 export const getAttendance = async (req, res) => {
     try {
-        const { employee, date, month, year } = req.query;
+        const { employee, date, month, year, startDate, endDate } = req.query;
 
         const filter = {};
         if (employee) {
@@ -286,6 +286,12 @@ export const getAttendance = async (req, res) => {
         if (date) {
             // Daily report: attendance for one specific day.
             const { start, end } = getDayRange(date);
+            filter.date = { $gte: start, $lte: end };
+        } else if (startDate && endDate) {
+            const start = new Date(startDate);
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
             filter.date = { $gte: start, $lte: end };
         } else if (month && year) {
             // Monthly report: all attendance within the chosen month.
