@@ -5,7 +5,7 @@ import LopRecord from "../models/LopRecord.js";
 import SalaryAdvance from "../models/SalaryAdvance.js";
 import LateAdjustment from "../models/LateAdjustment.js";
 import Holiday from "../models/Holiday.js";
-import { lateDeductionForMinutes, splitLateMinutes, minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
+import { lateDeductionForMinutes, splitLateMinutes, minutesLate, startMinutesOf, startMinutesForRecord } from "../utils/attendanceRules.js";
 
 // Total LOP (Loss of Pay) days for an employee in a month, combining the two
 // sources that stay in sync: manual LOP entries (Deductions module) and days
@@ -92,11 +92,8 @@ export function daysInMonth(year, month) {
     return new Date(year, month, 0).getDate();
 }
 
-// WORKING DAYS — EVERY day of the selected month, Sundays included. Same figure
-// as Month Days, and the salary divisor: a day's pay is salary / this.
-//
-// Sundays are inside the count but can never cost anything: they are paid days,
-// and the loss-of-pay walk below skips them, so an employee who works every
+// Company policy: total working days = ALL calendar days in the month (including
+// Sundays). Sundays are paid without attendance; an employee present every
 // weekday is paid the full month.
 function countWorkingDays(year, month) {
     return daysInMonth(year, month);
@@ -108,16 +105,13 @@ const round1 = (n) => Math.round((n || 0) * 10) / 10;
 // Round to 2 decimal places.
 const round2 = (n) => Math.round((n || 0) * 100) / 100;
 
-// Paid-leave policy: the FIRST TWO leave days of each month are paid — one
-// casual and one sick — and everything beyond them becomes loss of pay.
+// Paid-leave policy: the FIRST TWO leave days of each month are paid,
+// and anything beyond them becomes loss of pay (LOP).
+// Half-day leaves also count toward these 2 paid leaves (2 half-days = 1 full leave day).
 //
-// The allowance is granted automatically on the days the employee did not work,
-// whether the day was recorded as a leave or simply marked absent. Timesheets
-// rarely distinguish the two, so keying the benefit off the leave type would
-// quietly deny it to anyone whose day was entered as "absent".
-const SICK_LEAVE_CAP = 1;
-const CASUAL_LEAVE_CAP = 1;
-const PAID_LEAVE_PER_MONTH = SICK_LEAVE_CAP + CASUAL_LEAVE_CAP;   // 1 CL + 1 SL
+// The allowance is granted automatically on the days/half-days the employee did not work,
+// whether recorded as leave, absent, or half-day.
+const PAID_LEAVE_PER_MONTH = 2; // 2 paid leave days max per month
 //
 // PROBATION earns no allowance at all: an employee still on probation has every
 // leave day treated as loss of pay.
@@ -159,7 +153,7 @@ function lateFigures(totalMinutes, adjustedExtra) {
 //
 // A working day with no record earns nothing — it is neither attendance nor a
 // paid day, so it simply drops out of the paid days.
-async function readAttendance(employee, year, month, startMinutes) {
+async function readAttendance(employee, year, month) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const end = new Date(year, month, 0, 23, 59, 59, 999);
     const records = await Attendance.find({
@@ -296,21 +290,22 @@ async function readAttendance(employee, year, month, startMinutes) {
         // ---- attendance days: only the records actually marked on working days.
         if (r.status === 'present' || r.status === 'late') {
             attendanceDays += 1;
-            // Judged on the ACTUAL check-in time, not the label on the day — a
-            // day saved as "present" with a 10:45 arrival is still assessed, and
+            // Judged on the ACTUAL check-in time using that specific day's shift timing —
+            // a day saved as "present" with a 10:45 arrival is still assessed, and
             // a day labelled "late" that arrived within the grace costs nothing.
             // A pardoned late arrival keeps its record but contributes no minutes.
             // The ladder is applied to the month's total, not to this one day.
-            if (!r.latePardoned) lateMinutes += minutesLate(r.checkIn, startMinutes);
+            if (!r.latePardoned) lateMinutes += minutesLate(r.checkIn, startMinutesForRecord(r, employee));
         } else if (r.status === 'half-day') {
-            attendanceDays += 0.5;      // the other half is lost
+            attendanceDays += 0.5;      // worked half day
+            leaveDays += 0.5;           // other half day is leave (2 half-days = 1 full leave day)
         } else if (r.status === 'wfh') {
             attendanceDays += 1;
             if (!r.wfhPardoned) wfhDeductionDays += 1;
         } else if (r.status === 'absent' || r.status === 'leave') {
             // A day not worked — recorded either as a leave or simply as absent.
             // Both count towards the monthly leave allowance: the first two are
-            // paid (1 CL + 1 SL, see paidLeaveOf) and the rest become LOP.
+            // paid (see paidLeaveOf) and the rest become LOP.
             leaveDays += 1;
             if (r.status === 'leave') {
                 if (r.leaveType === 'sick') sickLeaveDays += 1;
@@ -323,6 +318,22 @@ async function readAttendance(employee, year, month, startMinutes) {
         attendanceDays, paidSundays, paidHolidays, employedDays,
         leaveDays, sickLeaveDays, casualLeaveDays, lateMinutes, wfhDeductionDays,
     };
+}
+
+// Helper to check whether an employee is exempt from statutory PF and ESI deductions.
+// Exempt if:
+// 1. In probation period (employmentStatus === 'probation')
+// 2. An intern (employmentStatus === 'intern', designation contains 'intern', or empId matches intern naming pattern)
+export function isPfEsiExempt(employee) {
+    if (!employee) return false;
+    const status = String(employee.employmentStatus || '').toLowerCase();
+    const designation = String(employee.designation || '').toLowerCase();
+    const empId = String(employee.empId || '');
+
+    const isProbation = status === 'probation';
+    const isIntern = status === 'intern' || designation.includes('intern') || /(?:^intern|intern$|I$)/i.test(empId);
+
+    return isProbation || isIntern;
 }
 
 // Pure earnings math from attendance figures (no DB access) so it can be reused
@@ -340,7 +351,7 @@ async function readAttendance(employee, year, month, startMinutes) {
 //
 // Sundays are paid even though no attendance is marked on them; a working day
 // with no attendance is simply not paid.
-export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, paidSundays = 0, paidHolidays = 0, employedDays = null, leaveDays = 0, paidLeaveEligible = true, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0 }) {
+export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, paidSundays = 0, paidHolidays = 0, employedDays = null, leaveDays = 0, paidLeaveEligible = true, sickLeaveDays, casualLeaveDays, lateFraction = 0, lopDays = 0, wfhDeductionDays = 0, pfEsiEligible = true }) {
     // A day's pay = salary / working days, and working days is every day of the
     // month (Sundays included).
     const perDay = workingDays > 0 ? monthlySalary / workingDays : 0;
@@ -386,10 +397,11 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
     // PF and ESI are statutory contributions on the AGREED MONTHLY salary, so
     // they stay the same whatever the month's attendance came to — but there is
     // nothing to contribute on a month with no paid days at all (not yet started,
-    // or the employee was not on the payroll for any of it).
+    // or the employee was not on the payroll for any of it), and they are not
+    // applicable to employees on probation or interns.
     let pfDeduction = 0;
     let employeeEsi = 0;
-    if (paidDays > 0) {
+    if (paidDays > 0 && pfEsiEligible) {
         pfDeduction = monthlySalary > 30000 ? 1800 : round2((monthlySalary * 0.5) * 0.12);
         employeeEsi = monthlySalary <= 21000 ? round2(monthlySalary * 0.0075) : 0;
     }
@@ -431,13 +443,16 @@ export function deriveEarnings({ monthlySalary, workingDays, attendanceDays, pai
 // their real attendance for the month.
 async function computeSalary(employee, year, month, workingDays) {
     const { attendanceDays, paidSundays, paidHolidays, employedDays, leaveDays, sickLeaveDays, casualLeaveDays, lateMinutes, wfhDeductionDays } =
-        await readAttendance(employee, year, month, startMinutesOf(employee));
+        await readAttendance(employee, year, month);
     const lopDays = await readLopDays(employee._id, year, month);
     const salaryAdvance = await readSalaryAdvance(employee._id, year, month);
 
     // The month's late minutes, split into completed 90-minute slabs and the
     // leftover an admin may have adjusted in Salary Adjustments.
     const late = lateFigures(lateMinutes, await readLateAdjustment(employee._id, year, month));
+
+    const isProbation = employee.employmentStatus === 'probation';
+    const pfEsiEligible = !isPfEsiExempt(employee);
 
     return {
         // Recovered from this month's pay — summed from the Salary Advance records.
@@ -448,20 +463,21 @@ async function computeSalary(employee, year, month, workingDays) {
         lateSlabs: late.lateSlabs,
         lateExtraMinutes: late.lateExtraMinutes,
         ...deriveEarnings({
-        monthlySalary: employee.salary || 0,
-        workingDays,
-        attendanceDays,
-        paidSundays,
-        paidHolidays,
-        leaveDays,
-        // Probation employees get no monthly paid-leave allowance.
-        paidLeaveEligible: employee.employmentStatus !== 'probation',
-        sickLeaveDays,
-        casualLeaveDays,
-        lateFraction: late.lateFraction,
-        lopDays,
-        wfhDeductionDays,
-        employedDays,
+            monthlySalary: employee.salary || 0,
+            workingDays,
+            attendanceDays,
+            paidSundays,
+            paidHolidays,
+            leaveDays,
+            // Probation employees get no monthly paid-leave allowance.
+            paidLeaveEligible: !isProbation,
+            sickLeaveDays,
+            casualLeaveDays,
+            lateFraction: late.lateFraction,
+            lopDays,
+            wfhDeductionDays,
+            employedDays,
+            pfEsiEligible,
         }),
     };
 }
@@ -626,15 +642,22 @@ export const updateSalaryReport = async (req, res) => {
         if (monthlyWorkingDays !== undefined || attendanceDays !== undefined) {
             const wd = monthlyWorkingDays !== undefined ? (Number(monthlyWorkingDays) || 0) : (report.monthlyWorkingDays || 0);
             const att = attendanceDays !== undefined ? (Number(attendanceDays) || 0) : (report.attendanceDays || 0);
+            const employee = await Employee.findById(report.employee);
+            const isProbation = employee ? employee.employmentStatus === 'probation' : false;
+            const pfEsiEligible = employee ? !isPfEsiExempt(employee) : !isPfEsiExempt({ empId: report.empId });
+
             const { lateDeduction: _preserved, ...earnings } = deriveEarnings({
                 monthlySalary: report.monthlySalary || 0,
                 workingDays: wd,
                 attendanceDays: att,
                 // An overridden attendance implies the rest of the month is lost.
                 paidSundays: report.paidSundays || 0,
+                paidLeaveEligible: !isProbation,
+                leaveDays: report.leaveDays || 0,
                 sickLeaveDays: report.sickLeaveDays || 0,
                 casualLeaveDays: report.casualLeaveDays || 0,
                 lopDays: report.lopDays || 0,
+                pfEsiEligible,
             });
             Object.assign(report, earnings);
         }

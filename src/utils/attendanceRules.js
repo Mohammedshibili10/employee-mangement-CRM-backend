@@ -49,6 +49,65 @@ export const startMinutesOf = (employee) =>
 export const endMinutesOf = (employee) =>
     parseTimeToMinutes(employee?.workEndTime, DEFAULT_END_MINUTES);
 
+// Resolve the effective shift (workStartTime and workEndTime) for an employee on a given date.
+// If the employee has a shiftHistory list, the shift active on targetDate is returned.
+// Otherwise falls back to the employee's current workStartTime/workEndTime or defaults.
+export const getShiftForDate = (employee, targetDate = new Date()) => {
+    const target = new Date(targetDate).getTime();
+    if (employee?.shiftHistory && Array.isArray(employee.shiftHistory) && employee.shiftHistory.length > 0) {
+        // Find interval where effectiveFrom <= target and (effectiveTo is null or effectiveTo >= target)
+        const match = employee.shiftHistory.find((entry) => {
+            const from = new Date(entry.effectiveFrom).getTime();
+            const to = entry.effectiveTo ? new Date(entry.effectiveTo).getTime() : Infinity;
+            return target >= from && target <= to;
+        });
+        if (match) {
+            return {
+                workStartTime: match.workStartTime || DEFAULT_START,
+                workEndTime: match.workEndTime || DEFAULT_END,
+            };
+        }
+
+        // If outside exact intervals, sort chronologically
+        const sorted = [...employee.shiftHistory].sort((a, b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom));
+        if (target < new Date(sorted[0].effectiveFrom).getTime()) {
+            return {
+                workStartTime: sorted[0].workStartTime || DEFAULT_START,
+                workEndTime: sorted[0].workEndTime || DEFAULT_END,
+            };
+        }
+        const prior = sorted.filter((entry) => new Date(entry.effectiveFrom).getTime() <= target).pop();
+        if (prior) {
+            return {
+                workStartTime: prior.workStartTime || DEFAULT_START,
+                workEndTime: prior.workEndTime || DEFAULT_END,
+            };
+        }
+    }
+    return {
+        workStartTime: employee?.workStartTime || DEFAULT_START,
+        workEndTime: employee?.workEndTime || DEFAULT_END,
+    };
+};
+
+// Resolve start minutes for an attendance record, preferring record snapshot then historical employee shift
+export const startMinutesForRecord = (record, employee) => {
+    if (record?.workStartTime) {
+        return parseTimeToMinutes(record.workStartTime, DEFAULT_START_MINUTES);
+    }
+    const shift = getShiftForDate(employee, record?.date || new Date());
+    return parseTimeToMinutes(shift.workStartTime, DEFAULT_START_MINUTES);
+};
+
+// Resolve end minutes for an attendance record, preferring record snapshot then historical employee shift
+export const endMinutesForRecord = (record, employee) => {
+    if (record?.workEndTime) {
+        return parseTimeToMinutes(record.workEndTime, DEFAULT_END_MINUTES);
+    }
+    const shift = getShiftForDate(employee, record?.date || new Date());
+    return parseTimeToMinutes(shift.workEndTime, DEFAULT_END_MINUTES);
+};
+
 // True only when the check-in is past the start time plus the grace (09:35 on
 // the default 09:30 start).
 export const isLateCheckIn = (checkIn, startMinutes = DEFAULT_START_MINUTES) =>

@@ -13,6 +13,13 @@ export const employeeSchema = z.object({
     // half-day, overtime, deductions) follow these instead of a global timing.
     workStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "start time must be HH:MM").optional(),
     workEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "end time must be HH:MM").optional(),
+    shiftHistory: z.array(z.object({
+        workStartTime: z.string(),
+        workEndTime: z.string(),
+        effectiveFrom: z.coerce.date(),
+        effectiveTo: z.coerce.date().nullable().optional(),
+        createdAt: z.coerce.date().optional()
+    })).optional(),
     joiningDate: z.coerce.date(),
     status: z.enum(['active', 'inactive', 'terminated']).default('active'),
     employmentStatus: z.enum(['probation', 'permanent']).default('probation'),
@@ -39,6 +46,15 @@ const employeeMongooseSchema = new mongoose.Schema({
     // existing employees and any left blank behave exactly as before.
     workStartTime: { type: String, default: '09:30' },
     workEndTime: { type: String, default: '18:00' },
+    // Track historical shift timings so shift changes apply ONLY from effectiveFrom
+    // and never alter past attendance or historical payroll reports.
+    shiftHistory: [{
+        workStartTime: { type: String, default: '09:30' },
+        workEndTime: { type: String, default: '18:00' },
+        effectiveFrom: { type: Date, required: true },
+        effectiveTo: { type: Date, default: null },
+        createdAt: { type: Date, default: Date.now }
+    }],
     joiningDate: { type: Date, required: true },
     // Last working day, when the employee has left. Payroll stops counting the
     // month here: days after it are neither attendance nor loss of pay, exactly

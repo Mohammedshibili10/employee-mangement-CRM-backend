@@ -38,13 +38,23 @@ export const createEmployee = async (req, res) => {
         }
 
         const { workStartTime, workEndTime } = req.body;
+        const start = workStartTime?.trim() ? workStartTime.trim() : '09:30';
+        const end = workEndTime?.trim() ? workEndTime.trim() : '18:00';
+        const effectiveDate = req.body.joiningDate ? new Date(req.body.joiningDate) : new Date();
+
         const employee = await Employee.create({
             ...req.body,
             empId,
             phone: phoneNumber,
             // Fall back to the company default when blank/omitted.
-            workStartTime: workStartTime?.trim() ? workStartTime.trim() : '09:30',
-            workEndTime: workEndTime?.trim() ? workEndTime.trim() : '18:00',
+            workStartTime: start,
+            workEndTime: end,
+            shiftHistory: [{
+                workStartTime: start,
+                workEndTime: end,
+                effectiveFrom: effectiveDate,
+                effectiveTo: null,
+            }],
             onboarding: {
                 created: true,
                 idGenerated: true,
@@ -190,15 +200,72 @@ export const getEmployee = async (req, res) => {
             if(workStartTime !== undefined) update.workStartTime = String(workStartTime).trim();
             if(workEndTime !== undefined) update.workEndTime = String(workEndTime).trim();
 
+            const startChanged = update.workStartTime !== undefined && update.workStartTime !== existing.workStartTime;
+            const endChanged = update.workEndTime !== undefined && update.workEndTime !== existing.workEndTime;
+
+            if (startChanged || endChanged) {
+                const nextStart = update.workStartTime !== undefined ? update.workStartTime : (existing.workStartTime || '09:30');
+                const nextEnd = update.workEndTime !== undefined ? update.workEndTime : (existing.workEndTime || '18:00');
+                const now = new Date();
+
+                let currentHistory = Array.isArray(existing.shiftHistory) && existing.shiftHistory.length > 0
+                    ? existing.shiftHistory.map((h) => (h.toObject ? h.toObject() : { ...h }))
+                    : [];
+
+                if (currentHistory.length === 0) {
+                    const originDate = existing.joiningDate ? new Date(existing.joiningDate) : (existing.createdAt ? new Date(existing.createdAt) : new Date(0));
+                    currentHistory.push({
+                        workStartTime: existing.workStartTime || '09:30',
+                        workEndTime: existing.workEndTime || '18:00',
+                        effectiveFrom: originDate,
+                        effectiveTo: now,
+                    });
+                } else {
+                    currentHistory = currentHistory.map((h) => {
+                        if (!h.effectiveTo) {
+                            return { ...h, effectiveTo: now };
+                        }
+                        return h;
+                    });
+                }
+
+                currentHistory.push({
+                    workStartTime: nextStart,
+                    workEndTime: nextEnd,
+                    effectiveFrom: now,
+                    effectiveTo: null,
+                });
+
+                update.shiftHistory = currentHistory;
+            }
+
             const employee = await Employee.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
                 .populate('department');
 
             // Recalculate salary when anything that feeds it changes: the salary
-            // itself, or the start time (which drives the late-arrival deduction).
+            // itself, or employment status / designation (probation leave & PF/ESI exemptions).
+            // Shift changes apply ONLY from the change date onward and must NEVER recalculate or modify past reports!
             const salaryChanged = salary !== undefined && Number(salary) !== Number(existing.salary);
-            const startChanged = update.workStartTime !== undefined && update.workStartTime !== existing.workStartTime;
-            if (salaryChanged || startChanged) {
+            const statusChanged = employmentStatus !== undefined && employmentStatus !== existing.employmentStatus;
+            const designationChanged = designation !== undefined && designation !== existing.designation;
+
+            if (salaryChanged || statusChanged || designationChanged) {
                 const reports = await SalaryReport.find({ employee: id });
+                for (const report of reports) {
+                    await recalcSalaryForMonth(id, report.year, report.month);
+                }
+            } else if (startChanged || endChanged) {
+                // Only recalculate current month and future months, never past months!
+                const now = new Date();
+                const currentYear = now.getFullYear();
+                const currentMonth = now.getMonth() + 1;
+                const reports = await SalaryReport.find({
+                    employee: id,
+                    $or: [
+                        { year: { $gt: currentYear } },
+                        { year: currentYear, month: { $gte: currentMonth } }
+                    ]
+                });
                 for (const report of reports) {
                     await recalcSalaryForMonth(id, report.year, report.month);
                 }

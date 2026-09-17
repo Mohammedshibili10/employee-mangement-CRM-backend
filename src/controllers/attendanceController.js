@@ -2,7 +2,7 @@ import Attendance from "../models/Attendance.js";
 import User from "../models/User.js";
 import Employee from "../models/Employee.js";
 import { recalcSalaryForMonth } from "./salaryController.js";
-import { deriveStatusFor, overtimeFor, startMinutesOf, endMinutesOf } from "../utils/attendanceRules.js";
+import { deriveStatusFor, overtimeFor, getShiftForDate, parseTimeToMinutes, DEFAULT_START_MINUTES, DEFAULT_END_MINUTES } from "../utils/attendanceRules.js";
 
 // Keep any existing salary report for this employee's month in sync after
 // attendance/leave changes (no manual "recalculate" needed).
@@ -25,12 +25,6 @@ const getDayRange = (date) => {
     end.setHours(23, 59, 59, 999);
     return { start, end };
 };
-
-// Attendance status / overtime are derived from the EMPLOYEE'S own working
-// hours (deriveStatusFor / overtimeFor in attendanceRules). These thin wrappers
-// resolve an employee's start/end and delegate, so the callers stay readable.
-const deriveStatus = (checkIn, employee) => deriveStatusFor(checkIn, startMinutesOf(employee));
-const computeOvertime = (checkOut, employee) => overtimeFor(checkOut, endMinutesOf(employee));
 
 export const checkIn = async (req, res) => {
     try {
@@ -58,16 +52,17 @@ export const checkIn = async (req, res) => {
         }
 
         const now = new Date();
-
-        // Same punctuality rule as an admin-entered record, using this
-        // employee's own working hours.
-        const status = deriveStatus(now, employee);
+        const shift = getShiftForDate(employee, now);
+        const startMins = parseTimeToMinutes(shift.workStartTime, DEFAULT_START_MINUTES);
+        const status = deriveStatusFor(now, startMins);
 
         const attendance = await Attendance.create({
             employee: employee._id,
             date: now,
             checkIn: now,
             status,
+            workStartTime: shift.workStartTime,
+            workEndTime: shift.workEndTime,
             latitude,
             longitude,
             image,
@@ -109,11 +104,17 @@ export const checkOut = async (req, res) => {
         }
 
         const checkOutTime = new Date();
+        const shift = getShiftForDate(employee, attendance.date || checkOutTime);
+        const endMins = attendance.workEndTime
+            ? parseTimeToMinutes(attendance.workEndTime, DEFAULT_END_MINUTES)
+            : parseTimeToMinutes(shift.workEndTime, DEFAULT_END_MINUTES);
 
-        // Overtime is measured against this employee's own end time.
-        const { overtime, overtimeMinutes } = computeOvertime(checkOutTime, employee);
+        // Overtime is measured against this record's shift end time.
+        const { overtime, overtimeMinutes } = overtimeFor(checkOutTime, endMins);
 
         attendance.checkOut = checkOutTime;
+        if (!attendance.workStartTime) attendance.workStartTime = shift.workStartTime;
+        if (!attendance.workEndTime) attendance.workEndTime = shift.workEndTime;
         attendance.checkOutLatitude = latitude;
         attendance.checkOutLongitude = longitude;
         attendance.checkOutImage = image;
@@ -145,13 +146,16 @@ export const markAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Invalid leave type' });
         }
 
-        // Load the employee so status/overtime use their own working hours.
+        // Load the employee so status/overtime use the shift effective for the targeted date.
         const employeeDoc = await Employee.findById(employee);
         if (!employeeDoc) {
             return res.status(404).json({ message: 'Employee not found' });
         }
 
         const attendanceDate = date ? new Date(date) : new Date();
+        const shift = getShiftForDate(employeeDoc, attendanceDate);
+        const startMins = parseTimeToMinutes(shift.workStartTime, DEFAULT_START_MINUTES);
+        const endMins = parseTimeToMinutes(shift.workEndTime, DEFAULT_END_MINUTES);
 
         const { start, end } = getDayRange(attendanceDate);
         const existing = await Attendance.findOne({
@@ -164,8 +168,8 @@ export const markAttendance = async (req, res) => {
 
         const isNone = status === 'none';
         const isLeave = !isNone && (!!leaveType || status === 'leave');
-        const finalStatus = isNone ? 'none' : (isLeave ? 'leave' : (status || deriveStatus(checkIn, employeeDoc)));
-        const { overtime, overtimeMinutes } = (isLeave || isNone) ? { overtime: false, overtimeMinutes: 0 } : computeOvertime(checkOut, employeeDoc);
+        const finalStatus = isNone ? 'none' : (isLeave ? 'leave' : (status || deriveStatusFor(checkIn, startMins)));
+        const { overtime, overtimeMinutes } = (isLeave || isNone) ? { overtime: false, overtimeMinutes: 0 } : overtimeFor(checkOut, endMins);
 
         const attendance = await Attendance.create({
             employee,
@@ -173,6 +177,8 @@ export const markAttendance = async (req, res) => {
             checkIn: (isLeave || isNone) ? undefined : (checkIn || undefined),
             checkOut: (isLeave || isNone) ? undefined : (checkOut || undefined),
             status: finalStatus,
+            workStartTime: shift.workStartTime,
+            workEndTime: shift.workEndTime,
             leaveType: isNone ? undefined : (leaveType || undefined),
             overtime,
             overtimeMinutes,
@@ -208,10 +214,20 @@ export const updateAttendance = async (req, res) => {
             return res.status(404).json({ message: 'Attendance record not found' });
         }
 
-        // The employee's own working hours drive derived status / overtime below.
         const employeeDoc = await Employee.findById(attendance.employee);
+        const targetDate = date ? new Date(date) : attendance.date;
+        if (date) attendance.date = targetDate;
 
-        if (date) attendance.date = new Date(date);
+        // Preserve existing record's shift timing or look up historical shift for target date
+        const shift = {
+            workStartTime: attendance.workStartTime || getShiftForDate(employeeDoc, targetDate).workStartTime,
+            workEndTime: attendance.workEndTime || getShiftForDate(employeeDoc, targetDate).workEndTime,
+        };
+        if (!attendance.workStartTime) attendance.workStartTime = shift.workStartTime;
+        if (!attendance.workEndTime) attendance.workEndTime = shift.workEndTime;
+
+        const startMins = parseTimeToMinutes(shift.workStartTime, DEFAULT_START_MINUTES);
+        const endMins = parseTimeToMinutes(shift.workEndTime, DEFAULT_END_MINUTES);
 
         const wantsNone = status === 'none';
         const wantsLeave = !wantsNone && (status === 'leave' || !!leaveType);
@@ -239,8 +255,9 @@ export const updateAttendance = async (req, res) => {
             attendance.leaveType = undefined;
             if (checkIn !== undefined) attendance.checkIn = checkIn ? new Date(checkIn) : null;
             if (checkOut !== undefined) attendance.checkOut = checkOut ? new Date(checkOut) : null;
-            attendance.status = status || deriveStatus(attendance.checkIn, employeeDoc);
-            const { overtime, overtimeMinutes } = computeOvertime(attendance.checkOut, employeeDoc);
+            // If status is explicitly passed, use it; otherwise if checkIn changed or status not set, derive from record's startMins
+            attendance.status = status || (checkIn !== undefined ? deriveStatusFor(attendance.checkIn, startMins) : attendance.status);
+            const { overtime, overtimeMinutes } = overtimeFor(attendance.checkOut, endMins);
             attendance.overtime = overtime;
             attendance.overtimeMinutes = overtimeMinutes;
             if (lop !== undefined) attendance.lop = Number(lop) || 0;

@@ -3,7 +3,7 @@ import Employee from "../models/Employee.js";
 import Attendance from "../models/Attendance.js";
 import Holiday from "../models/Holiday.js";
 import { recalcSalaryForMonth } from "./salaryController.js";
-import { minutesLate, startMinutesOf } from "../utils/attendanceRules.js";
+import { minutesLate, startMinutesOf, startMinutesForRecord } from "../utils/attendanceRules.js";
 
 // Keep the salary report for a LOP record's month in sync (LOP deducts pay).
 const syncSalary = (employeeId, year, month) => recalcSalaryForMonth(employeeId, year, month);
@@ -23,7 +23,7 @@ export const getDeductions = async (req, res) => {
         const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
         const end = new Date(y, m, 0, 23, 59, 59, 999);
 
-        const employees = await Employee.find().select('name empId workStartTime department').lean();
+        const employees = await Employee.find().select('name empId workStartTime workEndTime shiftHistory department').lean();
         const empMap = {};
         employees.forEach((e) => { empMap[String(e._id)] = e; });
 
@@ -91,7 +91,7 @@ export const getDeductions = async (req, res) => {
                 // the charge is worked out from the month's total, so no single
                 // day carries a price of its own. Pardoning a day here removes
                 // its minutes from that total.
-                const mins = minutesLate(a.checkIn, startMinutesOf(e));
+                const mins = minutesLate(a.checkIn, startMinutesForRecord(a, e));
                 if (mins > 0) {
                     entries.push({
                         ...base, _id: a._id, source: 'attendance', absence: false, entryType: 'late',

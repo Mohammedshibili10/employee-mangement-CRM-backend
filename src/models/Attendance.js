@@ -10,6 +10,9 @@ export const attendanceSchema = z.object({
     checkIn: z.coerce.date().optional(),
     checkOut: z.coerce.date().optional(),
 
+    workStartTime: z.string().optional(),
+    workEndTime: z.string().optional(),
+
     status: z.enum(['present', 'absent', 'late', 'half-day', 'leave', 'wfh', 'holiday', 'none']),
     leaveType: z.enum(['sick', 'casual']).optional(),
 
@@ -25,6 +28,9 @@ const attendanceMongooseSchema = new mongoose.Schema({
     date: { type: Date, required: true },
     checkIn: { type: Date },
     checkOut: { type: Date },
+    // Shift timings snapshot at the time attendance was marked/punched.
+    workStartTime: { type: String },
+    workEndTime: { type: String },
     // 'holiday' — a company holiday. Paid like a Sunday: never attendance,
     // never a loss of pay. Dates configured in Holiday Management apply to
     // everyone automatically; this status is for marking one-off cases.
